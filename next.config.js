@@ -1,9 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Expose server-side env vars to client (prefixed with NEXT_PUBLIC_)
   env: {
-    PAPERCLIP_API_URL: process.env.PAPERCLIP_API_URL || 'http://localhost:3100',
-    PAPERCLIP_COMPANY_ID: process.env.PAPERCLIP_COMPANY_ID || 'b18b9b76-bb39-42b8-8349-c323bffd5e3b',
-    PAPERCLIP_API_KEY: process.env.PAPERCLIP_API_KEY || '',
+    PAPERCLIP_API: process.env.PAPERCLIP_API || 'http://localhost:3100',
+  },
+  // Allow requests to any Paperclip API endpoint
+  async rewrites() {
+    return []
   },
 }
+
 module.exports = nextConfig
