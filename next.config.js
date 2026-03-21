@@ -1,13 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Expose server-side env vars to client (prefixed with NEXT_PUBLIC_)
-  env: {
-    PAPERCLIP_API: process.env.PAPERCLIP_API || 'http://localhost:3100',
-  },
-  // Allow requests to any Paperclip API endpoint
-  async rewrites() {
-    return []
-  },
+    env: {
+          NEXT_PUBLIC_PAPERCLIP_API: process.env.NEXT_PUBLIC_PAPERCLIP_API || 'https://alllinesauto.taile32c4c.ts.net',
+          NEXT_PUBLIC_PAPERCLIP_KEY: process.env.NEXT_PUBLIC_PAPERCLIP_KEY || '',
+          NEXT_PUBLIC_PAPERCLIP_COMPANY: process.env.NEXT_PUBLIC_PAPERCLIP_COMPANY || 'b18b9b76-bb39-42b8-8349-c323bffd5e3b',
+    },
+    // Allow requests to any Paperclip API endpoint
+    async rewrites() {
+          return []
+    },
 }
 
 module.exports = nextConfig
