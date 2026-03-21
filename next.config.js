@@ -1,34 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  reactStrictMode: true,
   env: {
-    NEXT_PUBLIC_PAPERCLIP_API: process.env.NEXT_PUBLIC_PAPERCLIP_API || 'https://alllinesauto.taile32c4c.ts.net',
-    NEXT_PUBLIC_PAPERCLIP_KEY: process.env.NEXT_PUBLIC_PAPERCLIP_KEY || '',
+    NEXT_PUBLIC_PAPERCLIP_API: process.env.NEXT_PUBLIC_PAPERCLIP_API || 'https://paperclipapi.com',
+    NEXT_PUBLIC_PAPERCLIP_KEY: process.env.NEXT_PUBLIC_PAPERCLIP_KEY || 'pcp_6720463d6b390b53e7c7dd28f1b3c64a618b24b899445e43',
     NEXT_PUBLIC_PAPERCLIP_COMPANY: process.env.NEXT_PUBLIC_PAPERCLIP_COMPANY || 'b18b9b76-bb39-42b8-8349-c323bffd5e3b',
   },
-  headers: async () => {
-    return [
-      {
-        source: '/api/:path*',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
-          },
-          {
-            key: 'Pragma',
-            value: 'no-cache',
-          },
-        ],
-      },
-    ]
-  },
 }
-
 module.exports = nextConfig
