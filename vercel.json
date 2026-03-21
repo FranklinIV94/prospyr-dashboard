@@ -1,0 +1,11 @@
+{
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "env": {
+    "NEXT_PUBLIC_PAPERCLIP_API": "@PAPERCLIP_API_URL",
+    "NEXT_PUBLIC_PAPERCLIP_KEY": "@PAPERCLIP_API_KEY",
+    "NEXT_PUBLIC_PAPERCLIP_COMPANY": "@PAPERCLIP_COMPANY_ID"
+  }
+}
