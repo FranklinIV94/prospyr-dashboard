@@ -13,7 +13,7 @@ export const authOptions: NextAuthOptions = {
         // Hardcoded for initial deployment - replace with DB lookup
         if (
           credentials?.email === 'Franklin@simplifyingbusinesses.com' &&
-          credentials?.password === 'Jordan2026! #'
+          credentials?.password === 'Jordan2026!'
         ) {
           return {
             id: '1',
