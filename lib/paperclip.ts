@@ -38,3 +38,31 @@ export async function getHealth(): Promise<{ status: string }> {
   if (!res.ok) throw new Error(`Health check failed: ${res.status}`)
   return res.json()
 }
+
+// Send a message to an agent via OpenClaw gateway
+export async function sendMessage(
+  agentId: string,
+  message: string,
+  gatewayUrl: string,
+  gatewayToken: string
+): Promise<string> {
+  const res = await fetch(`${gatewayUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${gatewayToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: `openclaw:${agentId}`,
+      messages: [{ role: 'user', content: message }],
+    }),
+  })
+
+  if (!res.ok) {
+    const error = await res.text()
+    throw new Error(`Gateway error ${res.status}: ${error}`)
+  }
+
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content || 'No response'
+}

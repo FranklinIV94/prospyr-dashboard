@@ -160,15 +160,44 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
   const [history, setHistory] = useState<Array<{ role: string; content: string }>>([
     { role: 'agent', content: `Hello, I'm ${agent.name}. How can I assist you today?` }
   ])
+  const [loading, setLoading] = useState(false)
 
-  const handleSend = () => {
-    if (!message.trim()) return
-    setHistory([...history, { role: 'user', content: message }])
+  const handleSend = async () => {
+    if (!message.trim() || loading) return
+
+    const userMsg = message
     setMessage('')
-    // Simulate agent response
-    setTimeout(() => {
-      setHistory(prev => [...prev, { role: 'agent', content: `I understand you need help with: "${message}". Let me work on that.` }])
-    }, 1000)
+    setLoading(true)
+
+    // Add user message immediately
+    setHistory(prev => [...prev, { role: 'user', content: userMsg }])
+
+    try {
+      const PAPERCLIP_API = process.env.NEXT_PUBLIC_PAPERCLIP_API || ''
+      const gatewayUrl = PAPERCLIP_API.replace('/api', '') // Remove /api suffix if present
+
+      const res = await fetch(`${gatewayUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: `openclaw:${agent.id}`,
+          messages: [{ role: 'user', content: userMsg }],
+        }),
+      })
+
+      if (!res.ok) throw new Error(`Error: ${res.status}`)
+
+      const data = await res.json()
+      const reply = data.choices?.[0]?.message?.content || 'No response'
+
+      setHistory(prev => [...prev, { role: 'agent', content: reply }])
+    } catch (error) {
+      setHistory(prev => [...prev, { role: 'agent', content: `Error: ${String(error)}` }])
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -218,9 +247,10 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
             />
             <button
               onClick={handleSend}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition-colors"
+              disabled={loading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-xl transition-colors"
             >
-              Send
+              {loading ? '...' : 'Send'}
             </button>
           </div>
         </div>
