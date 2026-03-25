@@ -7,7 +7,7 @@ import type { NextRequest } from 'next/server'
 const GATEWAY_TOKEN = '253ecf95f29059457d37566657ab1f1b68dedfab205fffde'
 
 // Gateway tunnel URL - cloudflared tunnel exposing port 18789
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'https://republican-reserves-div-spyware.trycloudflare.com'
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'https://ambassador-jimmy-mysimon-pennsylvania.trycloudflare.com'
 
 export async function POST(request: NextRequest) {
   try {
