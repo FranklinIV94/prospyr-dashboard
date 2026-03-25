@@ -6,8 +6,8 @@ import type { NextRequest } from 'next/server'
 
 const GATEWAY_TOKEN = '253ecf95f29059457d37566657ab1f1b68dedfab205fffde'
 
-// Gateway tunnel URL - cloudflared tunnel exposing port 18789
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'https://aluminium-incentives-constitutional-jackson.trycloudflare.com'
+// Use internal Tailscale IP - Railway servers can reach this
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://100.118.97.86:18789'
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'agentId and message required' }, { status: 400 })
     }
 
-    // Route directly to gateway tunnel
+    // Route to gateway via internal Tailscale network
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
       method: 'POST',
       headers: {
