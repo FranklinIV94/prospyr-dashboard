@@ -7,7 +7,7 @@ import type { NextRequest } from 'next/server'
 const GATEWAY_TOKEN = '253ecf95f29059457d37566657ab1f1b68dedfab205fffde'
 
 // Use internal Tailscale IP - Railway servers can reach this
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://100.118.97.86:18789'
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'https://alllinesauto.taile32c4c.ts.net:18789'
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'agentId and message required' }, { status: 400 })
     }
 
-    // Route to gateway via internal Tailscale network
+    // Route to gateway via Tailscale Funnel
     const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
       method: 'POST',
       headers: {
