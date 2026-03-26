@@ -12,12 +12,11 @@ export const config = {
      * Match all request paths except:
      * - /login
      * - /api/auth (NextAuth routes)
-     * - /api/prospyr/agents (agent registration - public)
-     * - /api/prospyr/events (SSE connections - public)
+     * - /api/prospyr (all agent API routes - public)
      * - /_next/static (static files)
      * - /_next/image (image optimization)
      * - /favicon.ico
      */
-    '/((?!login|api/auth|api/prospyr/agents|api/prospyr/events|_next/static|_next/image|favicon.ico).*)',
+    '/((?!login|api/auth|api/prospyr|_next/static|_next/image|favicon.ico).*)',
   ],
 }

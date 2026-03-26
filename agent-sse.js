@@ -21,6 +21,11 @@ const AGENT_NAME = process.env.PROSPYR_AGENT_NAME || 'Southstar'
 const AGENT_ROLE = process.env.PROSPYR_AGENT_ROLE || 'coo'
 const AGENT_CAPABILITIES = (process.env.PROSPYR_AGENT_CAPABILITIES || 'operations,research,code,system_admin').split(',')
 
+// Polyfill for Node.js EventSource (native in browsers)
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { EventSource } = require('eventsource')
+global.EventSource = EventSource
+
 let eventSource = null
 let isConnected = false
 let reconnectAttempts = 0
