@@ -2,9 +2,7 @@
 // Agent registration, heartbeat, and connection tracking
 
 import type { NextRequest } from 'next/server'
-import { getServerSession } from 'next-auth'
 import { getConnectionStatus } from '../events/route'
-import { authOptions } from '../../auth/[...nextauth]/route' 2>/dev/null || {}
 
 interface Agent {
   id: string
