@@ -1,10 +1,10 @@
 // API route: /api/prospyr/agents
-// Agent registration and heartbeat
+// Agent registration, heartbeat, and connection tracking
 
 import type { NextRequest } from 'next/server'
+import { getConnectionStatus } from '../events/route'
 
-// In-memory agent registry (would be Redis in production)
-const registeredAgents: Map<string, {
+interface Agent {
   id: string
   name: string
   role: string
@@ -12,23 +12,47 @@ const registeredAgents: Map<string, {
   capabilities: string[]
   lastHeartbeat: string
   currentTaskId?: string
-}> = new Map()
+  connected?: boolean
+}
+
+// In-memory agent registry
+const registeredAgents: Map<string, Agent> = new Map()
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const agentId = url.searchParams.get('agentId')
+  const action = url.searchParams.get('action')
 
+  // Get connection status (real-time SSE connections)
+  if (action === 'connections') {
+    const connections = getConnectionStatus()
+    return Response.json(connections)
+  }
+
+  // Get specific agent
   if (agentId) {
     const agent = registeredAgents.get(agentId)
     if (!agent) {
       return Response.json({ error: 'Agent not found' }, { status: 404 })
     }
+    
+    // Check if connected via SSE
+    const connections = getConnectionStatus()
+    agent.connected = connections.connectedAgents.includes(agentId)
+    
     return Response.json({ agent })
   }
 
-  // Return all agents
+  // Return all agents with connection status
+  const connections = getConnectionStatus()
+  const agents = Array.from(registeredAgents.values()).map(agent => ({
+    ...agent,
+    connected: connections.connectedAgents.includes(agent.id)
+  }))
+
   return Response.json({ 
-    agents: Array.from(registeredAgents.values()) 
+    agents,
+    totalConnected: connections.total
   })
 }
 
@@ -41,16 +65,18 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'agentId and name required' }, { status: 400 })
     }
 
-    const agent = {
+    const agent: Agent = {
       id: agentId,
       name,
       role: role || 'agent',
-      status: 'online' as const,
+      status: 'online',
       capabilities: capabilities || [],
       lastHeartbeat: new Date().toISOString(),
     }
 
     registeredAgents.set(agentId, agent)
+    
+    console.log(`[AGENTS] Registered: ${name} (${agentId})`)
 
     return Response.json({ 
       agent,
@@ -83,4 +109,16 @@ export async function PATCH(request: NextRequest) {
   } catch (error) {
     return Response.json({ error: 'Invalid request body' }, { status: 400 })
   }
+}
+
+export async function DELETE(request: NextRequest) {
+  const url = new URL(request.url)
+  const agentId = url.searchParams.get('agentId')
+
+  if (!agentId) {
+    return Response.json({ error: 'agentId required' }, { status: 400 })
+  }
+
+  const deleted = registeredAgents.delete(agentId)
+  return Response.json({ deleted })
 }

@@ -1,9 +1,9 @@
 // API route: /api/prospyr/tasks
-// Create, list, claim, and complete tasks
+// Create tasks and assign to agents (real-time via SSE)
 
 import type { NextRequest } from 'next/server'
+import { sendTaskToAgent, getConnectionStatus } from '../events/route'
 
-// In-memory task store (would be Redis in production)
 interface Task {
   id: string
   type: string
@@ -19,54 +19,35 @@ interface Task {
 }
 
 const tasks: Map<string, Task> = new Map()
-const taskQueue: string[] = [] // FIFO queue for pending tasks
 
 function generateId() {
   return crypto.randomUUID()
 }
 
+// GET - List tasks or check connection status
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const status = url.searchParams.get('status')
   const agentId = url.searchParams.get('agentId')
   const action = url.searchParams.get('action')
 
-  // Agent polling for work
-  if (action === 'poll' && agentId) {
-    // Find pending task not assigned to anyone, or assigned to this agent
-    let task = Array.from(tasks.values()).find(
-      t => t.status === 'pending' || (t.status === 'assigned' && t.assignedTo === agentId)
-    )
-    
-    // If no assigned task, claim an unassigned pending task
-    if (!task) {
-      task = Array.from(tasks.values()).find(
-        t => t.status === 'queued' && !t.assignedTo
-      )
-      if (task) {
-        task.status = 'assigned'
-        task.assignedTo = agentId
-        task.updatedAt = new Date().toISOString()
-      }
-    }
-    
-    if (!task) {
-      return Response.json({ task: null, message: 'No tasks available' })
-    }
-    
-    return Response.json({ task })
+  // Connection status for agents
+  if (action === 'status') {
+    return Response.json(getConnectionStatus())
   }
 
-  // Get tasks by status
+  // Get tasks assigned to specific agent
+  if (agentId) {
+    const agentTasks = Array.from(tasks.values()).filter(t => t.assignedTo === agentId)
+    return Response.json({ tasks: agentTasks })
+  }
+
+  // Filter by status
   let taskList = Array.from(tasks.values())
   if (status) {
     taskList = taskList.filter(t => t.status === status)
   }
-  if (agentId) {
-    taskList = taskList.filter(t => t.assignedTo === agentId)
-  }
 
-  // Sort by priority then createdAt
   taskList.sort((a, b) => {
     const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 }
     const pDiff = priorityOrder[a.priority] - priorityOrder[b.priority]
@@ -77,6 +58,7 @@ export async function GET(request: NextRequest) {
   return Response.json({ tasks: taskList })
 }
 
+// POST - Create a new task
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -98,7 +80,16 @@ export async function POST(request: NextRequest) {
     }
 
     tasks.set(task.id, task)
-    if (!assignTo) taskQueue.push(task.id)
+
+    // If agent is specified and connected, send task via SSE immediately
+    if (assignTo) {
+      const sent = sendTaskToAgent(assignTo, task)
+      if (sent) {
+        console.log(`[TASKS] Task ${task.id} pushed to agent ${assignTo}`)
+      } else {
+        console.log(`[TASKS] Task ${task.id} queued for agent ${assignTo} (not connected)`)
+      }
+    }
 
     return Response.json({ task }, { status: 201 })
   } catch (error) {
@@ -106,6 +97,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// PATCH - Update task status
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
@@ -135,6 +127,7 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
+// DELETE - Delete a task
 export async function DELETE(request: NextRequest) {
   const url = new URL(request.url)
   const taskId = url.searchParams.get('id')
