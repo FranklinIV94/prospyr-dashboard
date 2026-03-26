@@ -173,24 +173,17 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
     setHistory(prev => [...prev, { role: 'user', content: userMsg }])
 
     try {
-      const PAPERCLIP_API = process.env.NEXT_PUBLIC_PAPERCLIP_API || ''
-      const gatewayUrl = PAPERCLIP_API.replace('/api', '') // Remove /api suffix if present
-
-      const res = await fetch(`${gatewayUrl}/v1/chat/completions`, {
+      // Call server-side API route which proxies to the gateway
+      const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: `openclaw:${agent.id}`,
-          messages: [{ role: 'user', content: userMsg }],
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: agent.id, message: userMsg }),
       })
 
       if (!res.ok) throw new Error(`Error: ${res.status}`)
 
       const data = await res.json()
-      const reply = data.choices?.[0]?.message?.content || 'No response'
+      const reply = data.reply || data.error || 'No response'
 
       setHistory(prev => [...prev, { role: 'agent', content: reply }])
     } catch (error) {
