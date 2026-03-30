@@ -11,8 +11,23 @@ const nextConfig = {
               NEXT_PUBLIC_PAPERCLIP_KEY: process.env.NEXT_PUBLIC_PAPERCLIP_KEY || '',
               NEXT_PUBLIC_PAPERCLIP_COMPANY: process.env.NEXT_PUBLIC_PAPERCLIP_COMPANY || 'b18b9b76-bb39-42b8-8349-c323bffd5e3b',
       },
-      async rewrites() {
-              return []
+      // Disable caching to prevent Railway edge caching issues
+      headers: async () => {
+              return [
+                      {
+                              source: '/api/:path*',
+                              headers: [
+                                      {
+                                              key: 'Cache-Control',
+                                              value: 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+                                      },
+                                      {
+                                              key: 'Pragma',
+                                              value: 'no-cache',
+                                      },
+                              ],
+                      },
+              ]
       },
 }
 
