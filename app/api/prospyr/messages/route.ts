@@ -1,9 +1,12 @@
 // API route: /api/prospyr/messages
 // Send messages to agents (real-time via SSE)
-// NOTE: This route is intentionally public for agent communication
+// This route is explicitly public - no auth required
 
-import type { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { sendMessageToAgent } from '../events/route'
+
+// Bypass auth for this route entirely
+export const dynamic = 'force-dynamic'
 
 interface Message {
   id: string
@@ -34,15 +37,15 @@ export async function GET(request: NextRequest) {
   const agentId = url.searchParams.get('agentId')
 
   if (!agentId) {
-    return Response.json({ error: 'agentId required' }, { status: 400 })
+    return NextResponse.json({ error: 'agentId required' }, { status: 400 })
   }
 
   const session = chatSessions.get(agentId)
   if (!session) {
-    return Response.json({ messages: [], session: null })
+    return NextResponse.json({ messages: [], session: null })
   }
 
-  return Response.json({
+  return NextResponse.json({
     messages: session.messages,
     session: {
       agentId: session.agentId,
@@ -58,7 +61,7 @@ export async function POST(request: NextRequest) {
     const { agentId, content, replyTo } = body
 
     if (!agentId || !content) {
-      return Response.json({ error: 'agentId and content required' }, { status: 400 })
+      return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
 
     // Create session if doesn't exist
@@ -90,13 +93,13 @@ export async function POST(request: NextRequest) {
     // Send via SSE if agent is connected
     const sent = sendMessageToAgent(agentId, message)
 
-    return Response.json({
+    return NextResponse.json({
       message,
       sessionId: session.id,
       delivered: sent
     }, { status: 201 })
 
   } catch (error) {
-    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 }

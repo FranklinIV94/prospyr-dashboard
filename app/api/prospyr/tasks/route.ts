@@ -1,8 +1,12 @@
 // API route: /api/prospyr/tasks
 // Create tasks and assign to agents (real-time via SSE)
+// This route is explicitly public - no auth required
 
-import type { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { sendTaskToAgent, getConnectionStatus } from '../events/route'
+
+// Bypass auth for this route entirely
+export const dynamic = 'force-dynamic'
 
 interface Task {
   id: string
@@ -33,13 +37,13 @@ export async function GET(request: NextRequest) {
 
   // Connection status for agents
   if (action === 'status') {
-    return Response.json(getConnectionStatus())
+    return NextResponse.json(getConnectionStatus())
   }
 
   // Get tasks assigned to specific agent
   if (agentId) {
     const agentTasks = Array.from(tasks.values()).filter(t => t.assignedTo === agentId)
-    return Response.json({ tasks: agentTasks })
+    return NextResponse.json({ tasks: agentTasks })
   }
 
   // Filter by status
@@ -55,7 +59,7 @@ export async function GET(request: NextRequest) {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   })
 
-  return Response.json({ tasks: taskList })
+  return NextResponse.json({ tasks: taskList })
 }
 
 // POST - Create a new task
@@ -65,7 +69,7 @@ export async function POST(request: NextRequest) {
     const { description, type = 'general', priority = 'medium', assignTo } = body
 
     if (!description) {
-      return Response.json({ error: 'Description required' }, { status: 400 })
+      return NextResponse.json({ error: 'Description required' }, { status: 400 })
     }
 
     const task: Task = {
@@ -91,9 +95,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return Response.json({ task }, { status: 201 })
+    return NextResponse.json({ task }, { status: 201 })
   } catch (error) {
-    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 }
 
@@ -104,12 +108,12 @@ export async function PATCH(request: NextRequest) {
     const { taskId, status, result, error } = body
 
     if (!taskId) {
-      return Response.json({ error: 'taskId required' }, { status: 400 })
+      return NextResponse.json({ error: 'taskId required' }, { status: 400 })
     }
 
     const task = tasks.get(taskId)
     if (!task) {
-      return Response.json({ error: 'Task not found' }, { status: 404 })
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 })
     }
 
     if (status) task.status = status
@@ -121,9 +125,9 @@ export async function PATCH(request: NextRequest) {
       task.completedAt = new Date().toISOString()
     }
 
-    return Response.json({ task })
+    return NextResponse.json({ task })
   } catch (error) {
-    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 }
 
@@ -133,9 +137,9 @@ export async function DELETE(request: NextRequest) {
   const taskId = url.searchParams.get('id')
 
   if (!taskId) {
-    return Response.json({ error: 'Task ID required' }, { status: 400 })
+    return NextResponse.json({ error: 'Task ID required' }, { status: 400 })
   }
 
   const deleted = tasks.delete(taskId)
-  return Response.json({ deleted })
+  return NextResponse.json({ deleted })
 }
