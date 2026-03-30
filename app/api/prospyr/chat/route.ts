@@ -1,8 +1,9 @@
 // API route: /api/prospyr/chat
 // Send messages to agents (real-time via SSE)
+// NOTE: This route is intentionally public for agent communication
 
 import type { NextRequest } from 'next/server'
-import { sendMessageToAgent, getConnectionStatus } from '../events/route'
+import { sendMessageToAgent } from '../events/route'
 
 interface Message {
   id: string
@@ -11,6 +12,7 @@ interface Message {
   content: string
   timestamp: string
   read: boolean
+  replyTo?: string
 }
 
 interface ChatSession {
@@ -53,7 +55,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { agentId, content } = body
+    const { agentId, content, replyTo } = body
 
     if (!agentId || !content) {
       return Response.json({ error: 'agentId and content required' }, { status: 400 })
@@ -78,7 +80,8 @@ export async function POST(request: NextRequest) {
       role: 'user',
       content,
       timestamp: new Date().toISOString(),
-      read: false
+      read: false,
+      replyTo
     }
 
     session.messages.push(message)
