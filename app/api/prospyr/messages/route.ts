@@ -1,4 +1,4 @@
-// API route: /api/prospyr/chat
+// API route: /api/prospyr/messages
 // Send messages to agents (real-time via SSE)
 // NOTE: This route is intentionally public for agent communication
 
