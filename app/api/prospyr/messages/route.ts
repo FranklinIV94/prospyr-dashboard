@@ -100,4 +100,3 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Invalid request body' }, { status: 400 })
   }
 }
-# Trivial change to force Railway rebuild
