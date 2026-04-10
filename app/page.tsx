@@ -258,6 +258,7 @@ export default function Dashboard() {
   const [selectedCompany, setSelectedCompany] = useState('all')
   const [activeTab, setActiveTab] = useState<'agents' | 'tasks' | 'analytics'>('agents')
   const [chatAgent, setChatAgent] = useState<typeof MOCK_AGENTS[0] | null>(null)
+  const [showNewTaskModal, setShowNewTaskModal] = useState(false)
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => { setMounted(true) }, [])
@@ -368,7 +369,10 @@ export default function Dashboard() {
           <div className="space-y-3">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Active Tasks</h2>
-              <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">
+              <button 
+                onClick={() => setShowNewTaskModal(true)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+              >
                 + New Task
               </button>
             </div>
@@ -422,6 +426,199 @@ export default function Dashboard() {
       {chatAgent && (
         <ChatPanel agent={chatAgent} onClose={() => setChatAgent(null)} />
       )}
+
+      {/* New Task Modal */}
+      {showNewTaskModal && (
+        <NewTaskModal 
+          onClose={() => setShowNewTaskModal(false)} 
+          onTaskCreated={(task) => {
+            console.log('Task created:', task)
+            setShowNewTaskModal(false)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function NewTaskModal({ onClose, onTaskCreated }: { onClose: () => void; onTaskCreated: (task: any) => void }) {
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [type, setType] = useState('general')
+  const [priority, setPriority] = useState('medium')
+  const [assignTo, setAssignTo] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const taskTypes = [
+    { value: 'security-audit', label: '🔒 Security Audit' },
+    { value: 'code-review', label: '📝 Code Review' },
+    { value: 'document-processing', label: '📄 Document Processing' },
+    { value: 'research', label: '🔍 Research' },
+    { value: 'client-communication', label: '💬 Client Communication' },
+    { value: 'general', label: '⚡ General' },
+  ]
+
+  const priorities = [
+    { value: 'critical', label: '🔴 Critical', color: 'bg-red-600' },
+    { value: 'high', label: '🟠 High', color: 'bg-orange-600' },
+    { value: 'medium', label: '🟡 Medium', color: 'bg-yellow-600' },
+    { value: 'low', label: '⚪ Low', color: 'bg-slate-600' },
+  ]
+
+  const agents = MOCK_AGENTS.filter(a => a.status !== 'offline')
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!title.trim() || !description.trim()) {
+      setError('Title and description are required')
+      return
+    }
+
+    setLoading(true)
+    setError('')
+
+    try {
+      const res = await fetch('/api/prospyr/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: description.trim(),
+          type,
+          priority,
+          assignTo: assignTo || undefined,
+          requiredCapabilities: type !== 'general' ? [type] : [],
+        }),
+      })
+
+      if (!res.ok) {
+        throw new Error(`Error: ${res.status}`)
+      }
+
+      const data = await res.json()
+      onTaskCreated(data.task)
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-slate-950/90 z-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+          <h3 className="text-lg font-semibold text-white">Create New Task</h3>
+          <button 
+            onClick={onClose}
+            className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {error && (
+            <div className="p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-400 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1">
+              Title *
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Brief task title"
+              className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1">
+              Description *
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Detailed task description"
+              rows={3}
+              className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">
+                Type
+              </label>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-blue-500"
+              >
+                {taskTypes.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">
+                Priority
+              </label>
+              <select
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
+                className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-blue-500"
+              >
+                {priorities.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1">
+              Assign To (optional)
+            </label>
+            <select
+              value={assignTo}
+              onChange={(e) => setAssignTo(e.target.value)}
+              className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-blue-500"
+            >
+              <option value="">Unassigned - Any available agent</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2 px-4 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-xl transition-colors"
+            >
+              {loading ? 'Creating...' : 'Create Task'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }

@@ -1,28 +1,25 @@
 #!/usr/bin/env node
 /**
- * Prospyr Agent - Real-time SSE Client
+ * Prospyr Agent - Real-time SSE Client (Updated for new API)
  * 
  * Connects to dashboard via Server-Sent Events (SSE) for instant
  * task delivery, chat messages, and command execution.
  * 
  * Usage:
- *   node agent-sse.js --agent-id <id> --agent-name <name> --dashboard-url <url>
+ *   node agent-sse.js
  * 
  * Environment variables:
- *   PROSPYR_AGENT_ID       - Agent ID
- *   PROSPYR_AGENT_NAME     - Agent name  
- *   PROSPYR_DASHBOARD_URL  - Dashboard URL (e.g., https://control.simplifyingbusinesses.com)
- *   PROSPYR_AGENT_TOKEN    - Authentication token
+ *   PROSPYR_AGENT_ID       - Agent ID (default: southstar-001)
+ *   PROSPYR_AGENT_NAME     - Agent name (default: Southstar)
+ *   PROSPYR_DASHBOARD_URL  - Dashboard URL (default: https://control.simplifyingbusinesses.com)
  */
 
 const API_BASE = process.env.PROSPYR_DASHBOARD_URL || 'https://control.simplifyingbusinesses.com'
 const AGENT_ID = process.env.PROSPYR_AGENT_ID || 'southstar-001'
 const AGENT_NAME = process.env.PROSPYR_AGENT_NAME || 'Southstar'
-const AGENT_ROLE = process.env.PROSPYR_AGENT_ROLE || 'coo'
-const AGENT_CAPABILITIES = (process.env.PROSPYR_AGENT_CAPABILITIES || 'operations,research,code,system_admin').split(',')
+const AGENT_CAPABILITIES = (process.env.PROSPYR_AGENT_CAPABILITIES || 'security-audit,code-review,document-processing,web-search,client-communication').split(',')
 
-// Polyfill for Node.js EventSource (native in browsers)
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// Polyfill for Node.js EventSource
 const { EventSource } = require('eventsource')
 global.EventSource = EventSource
 
@@ -64,21 +61,21 @@ function log(type, ...args) {
 async function registerAgent() {
   try {
     log('info', `Registering as ${AGENT_NAME} (${AGENT_ID})...`)
+    log('info', `Capabilities: ${AGENT_CAPABILITIES.join(', ')}`)
     
-    const res = await fetch(`${API_BASE}/api/prospyr/agents`, {
+    const res = await fetch(`${API_BASE}/api/prospyr/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agentId: AGENT_ID,
         name: AGENT_NAME,
-        role: AGENT_ROLE,
         capabilities: AGENT_CAPABILITIES
       })
     })
     
     if (res.ok) {
       const data = await res.json()
-      log('success', `Registered: ${data.agent.name} (${data.agent.role})`)
+      log('success', `Registered: ${data.agent?.name || AGENT_NAME}`)
       return true
     } else {
       log('error', `Registration failed: ${res.status}`)
@@ -90,14 +87,16 @@ async function registerAgent() {
   }
 }
 
-// Send heartbeat
-async function sendHeartbeat(status = 'idle') {
+// Send heartbeat with capabilities status
+async function sendHeartbeat(status = 'available') {
   try {
-    await fetch(`${API_BASE}/api/prospyr/agents`, {
-      method: 'PATCH',
+    await fetch(`${API_BASE}/api/prospyr/events`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agentId: AGENT_ID,
+        name: AGENT_NAME,
+        capabilities: AGENT_CAPABILITIES,
         status,
         currentTaskId
       })
@@ -108,7 +107,7 @@ async function sendHeartbeat(status = 'idle') {
   }
 }
 
-// Update task status
+// Update task status (new lifecycle states)
 async function updateTaskStatus(taskId, status, result = null, error = null) {
   try {
     if (status === 'completed' || status === 'failed') {
@@ -146,17 +145,14 @@ async function sendChatResponse(messageId, content) {
   }
 }
 
-// Process a task (implement your actual task logic here)
+// Process a task (placeholder - integrate with OpenClaw tools)
 async function processTask(task) {
-  log('task', `Processing: ${task.description}`)
+  log('task', `Processing: ${task.title || task.description}`)
   log('info', `Task type: ${task.type}, priority: ${task.priority}`)
   
   // Simulate work - replace with actual implementation
-  // This is where you'd call your AI, run commands, etc.
-  
   await new Promise(resolve => setTimeout(resolve, 1000))
   
-  // Example: return success result
   return {
     success: true,
     output: `Task completed: ${task.description}`,
@@ -175,7 +171,7 @@ function handleEvent(event) {
       log('success', 'Connected to dashboard SSE stream')
       isConnected = true
       reconnectAttempts = 0
-      sendHeartbeat('idle')
+      sendHeartbeat('available')
       break
       
     case 'new_task':
@@ -202,13 +198,15 @@ function handleEvent(event) {
 // Handle new task
 async function handleNewTask(task) {
   log('task', `New task received: ${task.id}`)
+  log('info', `Title: ${task.title}`)
   log('info', `Description: ${task.description}`)
+  log('info', `Type: ${task.type}, Priority: ${task.priority}`)
   
   currentTaskId = task.id
   
   try {
-    // Update status to running
-    await updateTaskStatus(task.id, 'running')
+    // Update status to in_progress
+    await updateTaskStatus(task.id, 'in_progress')
     
     // Process the task
     const result = await processTask(task)
@@ -222,7 +220,7 @@ async function handleNewTask(task) {
     await updateTaskStatus(task.id, 'failed', null, error.message)
   }
   
-  sendHeartbeat('idle')
+  sendHeartbeat('available')
 }
 
 // Handle new message
@@ -230,8 +228,8 @@ async function handleNewMessage(message) {
   log('chat', `New message from user:`)
   log('info', message.content)
   
-  // Send automatic acknowledgment (replace with AI processing)
-  const response = `[${AGENT_NAME}] Message received. I'm currently ${currentTaskId ? 'processing a task' : 'idle'}. I'll respond to your message shortly.`
+  // Send automatic acknowledgment
+  const response = `[${AGENT_NAME}] Message received. I'm currently ${currentTaskId ? 'processing a task' : 'available'}.`
   
   try {
     await fetch(`${API_BASE}/api/prospyr/chat`, {
@@ -256,7 +254,7 @@ async function handleCancelTask(taskId) {
   if (currentTaskId === taskId) {
     currentTaskId = null
     log('warn', 'Current task cancelled')
-    sendHeartbeat('idle')
+    sendHeartbeat('available')
   }
 }
 
@@ -293,15 +291,6 @@ function connect() {
     
     setTimeout(connect, delay)
   }
-  
-  // Custom event listeners
-  eventSource.addEventListener('task', (event) => {
-    handleEvent(event.data)
-  })
-  
-  eventSource.addEventListener('message', (event) => {
-    handleEvent(event.data)
-  })
 }
 
 // Graceful shutdown
@@ -329,8 +318,10 @@ ${styles.bright}${styles.cyan}
 ║     Prospyr Agent - Real-time SSE Client                  ║
 ╠═══════════════════════════════════════════════════════════╣
 ║     Agent: ${AGENT_NAME.padEnd(47)}║
-║     Role:  ${AGENT_ROLE.padEnd(47)}║
-║     Dashboard: ${API_BASE.substring(0, 40).padEnd(40)}║
+║     ID:    ${AGENT_ID.padEnd(47)}║
+║     Dashboard: ${API_BASE.substring(0, 38).padEnd(38)}║
+║     Capabilities: ${AGENT_CAPABILITIES.slice(0, 2).join(', ').padEnd(35)}║
+║                 ${AGENT_CAPABILITIES.slice(2).join(', ').padEnd(35)}║
 ╚═══════════════════════════════════════════════════════════╝${styles.reset}
 `)
   
@@ -347,8 +338,8 @@ ${styles.bright}${styles.cyan}
   
   // Periodic heartbeat
   setInterval(() => {
-    if (isConnected && !currentTaskId) {
-      sendHeartbeat('idle')
+    if (isConnected) {
+      sendHeartbeat(currentTaskId ? 'busy' : 'available')
     }
   }, 30000)
   
