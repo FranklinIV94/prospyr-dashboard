@@ -1,44 +1,144 @@
 // API route: /api/chat
-// Proxies chat requests to OpenClaw gateway
-// Called from browser → Railway → Southstar gateway
+// Handles chat messages between dashboard and agents
+// Messages are stored locally and delivered via SSE
 
-import type { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { sendMessageToAgent } from './prospyr/events/route'
 
-const GATEWAY_TOKEN = '253ecf95f29059457d37566657ab1f1b68dedfab205fffde'
+export const dynamic = 'force-dynamic'
 
-// Use internal Tailscale IP - Railway servers can reach this
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'https://alllinesauto.taile32c4c.ts.net:18789'
+interface Message {
+  id: string
+  agentId: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+  read: boolean
+  replyTo?: string
+}
 
+interface ChatSession {
+  id: string
+  agentId: string
+  messages: Message[]
+  lastActivity: string
+}
+
+// In-memory chat sessions (per deployment)
+const chatSessions: Map<string, ChatSession> = new Map()
+
+function generateId() {
+  return crypto.randomUUID()
+}
+
+// GET - Get chat history for an agent
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url)
+  const agentId = url.searchParams.get('agentId')
+
+  if (!agentId) {
+    return NextResponse.json({ error: 'agentId required' }, { status: 400 })
+  }
+
+  const session = chatSessions.get(agentId)
+  if (!session) {
+    return NextResponse.json({ messages: [], session: null })
+  }
+
+  return NextResponse.json({
+    messages: session.messages,
+    session: {
+      agentId: session.agentId,
+      lastActivity: session.lastActivity
+    }
+  })
+}
+
+// POST - Send a chat message
 export async function POST(request: NextRequest) {
   try {
-    const { agentId, message } = await request.json()
+    const body = await request.json()
+    const { agentId, content, replyTo } = body
 
-    if (!agentId || !message) {
-      return Response.json({ error: 'agentId and message required' }, { status: 400 })
+    if (!agentId || !content) {
+      return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
 
-    // Route to gateway via Tailscale Funnel
-    const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${GATEWAY_TOKEN}`,
-      },
-      body: JSON.stringify({
-        model: `openclaw:${agentId}`,
-        messages: [{ role: 'user', content: message }],
-      }),
+    // Create session if doesn't exist
+    if (!chatSessions.has(agentId)) {
+      chatSessions.set(agentId, {
+        id: generateId(),
+        agentId,
+        messages: [],
+        lastActivity: new Date().toISOString()
+      })
+    }
+
+    const session = chatSessions.get(agentId)!
+
+    // Create message
+    const message: Message = {
+      id: generateId(),
+      agentId,
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+      read: false,
+      replyTo
+    }
+
+    session.messages.push(message)
+    session.lastActivity = new Date().toISOString()
+
+    // Try to send via SSE to the agent
+    sendMessageToAgent(agentId, {
+      type: 'chat_message',
+      message,
+      from: 'dashboard'
     })
 
-    if (!res.ok) {
-      const error = await res.text()
-      return Response.json({ error: `Gateway error ${res.status}: ${error}` }, { status: res.status })
+    return NextResponse.json({
+      message,
+      sessionId: session.id,
+      delivered: true
+    }, { status: 201 })
+
+  } catch (error) {
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+  }
+}
+
+// PUT - Agent responds to a message (called by agent SSE client)
+export async function PUT(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const { agentId, content, messageId } = body
+
+    if (!agentId || !content) {
+      return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
 
-    const data = await res.json()
-    const reply = data.choices?.[0]?.message?.content || 'No response'
-    return Response.json({ reply })
+    const session = chatSessions.get(agentId)
+    if (!session) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    }
+
+    // Create response message
+    const response: Message = {
+      id: generateId(),
+      agentId,
+      role: 'assistant',
+      content,
+      timestamp: new Date().toISOString(),
+      read: false,
+      replyTo: messageId
+    }
+
+    session.messages.push(response)
+    session.lastActivity = new Date().toISOString()
+
+    return NextResponse.json({ message: response })
   } catch (error) {
-    return Response.json({ error: String(error) }, { status: 500 })
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
   }
 }
