@@ -58,11 +58,13 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { agentId, content, replyTo } = body
+    const { agentId, content, message, replyTo } = body
 
-    if (!agentId || !content) {
+    if (!agentId || !(content || message)) {
       return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
+
+    const messageContent = content || message
 
     // Create session if doesn't exist
     if (!chatSessions.has(agentId)) {
@@ -81,7 +83,7 @@ export async function POST(request: NextRequest) {
       id: generateId(),
       agentId,
       role: 'user',
-      content,
+      content: messageContent,
       timestamp: new Date().toISOString(),
       read: false,
       replyTo
