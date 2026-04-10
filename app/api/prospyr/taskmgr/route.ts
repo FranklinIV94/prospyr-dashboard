@@ -1,24 +1,82 @@
 // API route: /api/prospyr/tasks
 // Create tasks and assign to agents (real-time via SSE)
-// Uses GET for reading, POST for creating
+// Enhanced with full lifecycle, capabilities, priorities
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sendTaskToAgent, getConnectionStatus } from '../events/route'
+import { sendTaskToAgent, getConnectionStatus, getConnectedAgents } from '../events/route'
 
 export const dynamic = 'force-dynamic'
 
+// Task status enum
+enum TaskStatus {
+  PENDING = 'pending',           // Created, waiting for agent
+  CLAIMED = 'claimed',          // Agent picked it up
+  IN_PROGRESS = 'in_progress',  // Working on it
+  COMPLETED = 'completed',       // Successfully done
+  FAILED = 'failed',            // Couldn't complete
+  BLOCKED = 'blocked'           // Waiting on something
+}
+
+// Task priority
+enum TaskPriority {
+  CRITICAL = 'critical',
+  HIGH = 'high',
+  MEDIUM = 'medium',
+  LOW = 'low'
+}
+
+// Task types
+enum TaskType {
+  SECURITY_AUDIT = 'security-audit',
+  CODE_REVIEW = 'code-review',
+  DOCUMENT_PROCESSING = 'document-processing',
+  RESEARCH = 'research',
+  CLIENT_COMMUNICATION = 'client-communication',
+  GENERAL = 'general'
+}
+
+// Task comment interface
+interface TaskComment {
+  id: string
+  author: string
+  content: string
+  timestamp: string
+  type: 'update' | 'blocker' | 'question' | 'resolution'
+}
+
+// Enhanced Task interface
 interface Task {
   id: string
-  type: string
+  title: string
   description: string
-  priority: 'critical' | 'high' | 'medium' | 'low'
-  status: 'pending' | 'queued' | 'assigned' | 'running' | 'completed' | 'failed' | 'cancelled'
-  assignedTo?: string
-  result?: string
-  error?: string
+  type: TaskType | string
+  priority: TaskPriority | string
+  status: TaskStatus | string
+  assignedTo: string | null
+  claimedBy: string | null
   createdAt: string
   updatedAt: string
-  completedAt?: string
+  startedAt: string | null
+  completedAt: string | null
+  result: string | null
+  error: string | null
+  blockers: string[]
+  comments: TaskComment[]
+  requiredCapabilities: string[]
+  skillUsed: string | null
+  workspaceId: string | null
+}
+
+// Agent interface (mirrors events/route)
+interface Agent {
+  agentId: string
+  name: string
+  role?: string
+  capabilities: string[]
+  status: 'available' | 'busy' | 'offline'
+  workspaceId?: string
+  tasksCompleted: number
+  registeredAt: string
 }
 
 const tasks: Map<string, Task> = new Map()
@@ -27,11 +85,26 @@ function generateId() {
   return crypto.randomUUID()
 }
 
+// Priority order for sorting
+const priorityOrder: Record<string, number> = {
+  [TaskPriority.CRITICAL]: 0,
+  [TaskPriority.HIGH]: 1,
+  [TaskPriority.MEDIUM]: 2,
+  [TaskPriority.LOW]: 3,
+  'critical': 0,
+  'high': 1,
+  'medium': 2,
+  'low': 3
+}
+
 // GET - List tasks or check connection status
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const status = url.searchParams.get('status')
   const agentId = url.searchParams.get('agentId')
+  const taskType = url.searchParams.get('type')
+  const priority = url.searchParams.get('priority')
+  const workspaceId = url.searchParams.get('workspaceId')
   const action = url.searchParams.get('action')
 
   // Connection status for agents
@@ -39,12 +112,29 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(getConnectionStatus())
   }
 
+  // Get all connected agents with capabilities
+  if (action === 'agents') {
+    const agents = getConnectedAgents()
+    const agentList = Array.from(agents.values()).map(a => ({
+      agentId: a.agentId,
+      name: a.name,
+      capabilities: a.capabilities,
+      status: a.status,
+      workspaceId: a.workspaceId,
+      tasksCompleted: a.tasksCompleted
+    }))
+    return NextResponse.json({ agents: agentList })
+  }
+
   // Create task via GET (workaround for POST blocking)
   if (action === 'create') {
+    const title = url.searchParams.get('title')
     const description = url.searchParams.get('description')
+    const type = url.searchParams.get('type') || TaskType.GENERAL
+    const priorityVal = url.searchParams.get('priority') || TaskPriority.MEDIUM
     const assignTo = url.searchParams.get('assignTo')
-    const type = url.searchParams.get('type') || 'general'
-    const priority = (url.searchParams.get('priority') as Task['priority']) || 'medium'
+    const requiredCapabilities = url.searchParams.get('capabilities')?.split(',').filter(Boolean) || []
+    const workspace = url.searchParams.get('workspaceId')
 
     if (!description) {
       return NextResponse.json({ error: 'Description required' }, { status: 400 })
@@ -52,17 +142,29 @@ export async function GET(request: NextRequest) {
 
     const task: Task = {
       id: generateId(),
-      type,
+      title: title || description.slice(0, 50),
       description,
-      priority,
-      status: assignTo ? 'assigned' : 'queued',
-      assignedTo: assignTo || undefined,
+      type,
+      priority: priorityVal,
+      status: TaskStatus.PENDING,
+      assignedTo: null,
+      claimedBy: assignTo || null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+      result: null,
+      error: null,
+      blockers: [],
+      comments: [],
+      requiredCapabilities,
+      skillUsed: null,
+      workspaceId: workspace || null
     }
 
     tasks.set(task.id, task)
 
+    // Auto-assign to capable agent if specified
     if (assignTo) {
       sendTaskToAgent(assignTo, task)
     }
@@ -76,15 +178,26 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ tasks: agentTasks })
   }
 
-  // Filter by status
+  // Filter by multiple criteria
   let taskList = Array.from(tasks.values())
+
   if (status) {
-    taskList = taskList.filter(t => t.status === status)
+    const statuses = status.split(',')
+    taskList = taskList.filter(t => statuses.includes(t.status))
+  }
+  if (taskType) {
+    taskList = taskList.filter(t => t.type === taskType)
+  }
+  if (priority) {
+    taskList = taskList.filter(t => t.priority === priority)
+  }
+  if (workspaceId) {
+    taskList = taskList.filter(t => t.workspaceId === workspaceId)
   }
 
+  // Sort by priority, then by creation date
   taskList.sort((a, b) => {
-    const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 }
-    const pDiff = priorityOrder[a.priority] - priorityOrder[b.priority]
+    const pDiff = (priorityOrder[a.priority] ?? 4) - (priorityOrder[b.priority] ?? 4)
     if (pDiff !== 0) return pDiff
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   })
@@ -96,7 +209,17 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { description, type = 'general', priority = 'medium', assignTo } = body
+    const {
+      title,
+      description,
+      type = TaskType.GENERAL,
+      priority = TaskPriority.MEDIUM,
+      assignTo,
+      requiredCapabilities = [],
+      workspaceId,
+      blockers = [],
+      comments = []
+    } = body
 
     if (!description) {
       return NextResponse.json({ error: 'Description required' }, { status: 400 })
@@ -104,17 +227,29 @@ export async function POST(request: NextRequest) {
 
     const task: Task = {
       id: generateId(),
-      type,
+      title: title || description.slice(0, 50),
       description,
+      type,
       priority,
-      status: assignTo ? 'assigned' : 'queued',
-      assignedTo: assignTo,
+      status: TaskStatus.PENDING,
+      assignedTo: null,
+      claimedBy: assignTo || null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+      result: null,
+      error: null,
+      blockers: blockers || [],
+      comments: comments || [],
+      requiredCapabilities: requiredCapabilities || [],
+      skillUsed: null,
+      workspaceId: workspaceId || null
     }
 
     tasks.set(task.id, task)
 
+    // Auto-assign to capable agent if specified
     if (assignTo) {
       sendTaskToAgent(assignTo, task)
     }
@@ -125,11 +260,23 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PATCH - Update task status
+// PATCH - Update task status, add comments, manage blockers
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
-    const { taskId, status, result, error } = body
+    const {
+      taskId,
+      status,
+      result,
+      error,
+      assignedTo,
+      claimedBy,
+      addBlocker,
+      removeBlocker,
+      addComment,
+      clearBlockers,
+      skillUsed
+    } = body
 
     if (!taskId) {
       return NextResponse.json({ error: 'taskId required' }, { status: 400 })
@@ -140,17 +287,102 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 })
     }
 
-    if (status) task.status = status
-    if (result !== undefined) task.result = result
-    if (error !== undefined) task.error = error
-    task.updatedAt = new Date().toISOString()
+    // Update status with lifecycle management
+    if (status) {
+      // Validate state transitions
+      const validTransitions: Record<string, string[]> = {
+        [TaskStatus.PENDING]: [TaskStatus.CLAIMED, TaskStatus.BLOCKED],
+        [TaskStatus.CLAIMED]: [TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.FAILED],
+        [TaskStatus.IN_PROGRESS]: [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED],
+        [TaskStatus.BLOCKED]: [TaskStatus.PENDING, TaskStatus.CLAIMED, TaskStatus.IN_PROGRESS],
+        [TaskStatus.FAILED]: [TaskStatus.PENDING], // Can retry
+        [TaskStatus.COMPLETED]: [] // Terminal state
+      }
 
-    if (status === 'completed' || status === 'failed') {
-      task.completedAt = new Date().toISOString()
+      // Allow direct transitions for flexibility
+      task.status = status
+      task.updatedAt = new Date().toISOString()
+
+      // Track lifecycle timestamps
+      if (status === TaskStatus.IN_PROGRESS && !task.startedAt) {
+        task.startedAt = new Date().toISOString()
+      }
+      if (status === TaskStatus.COMPLETED || status === TaskStatus.FAILED) {
+        task.completedAt = new Date().toISOString()
+      }
+    }
+
+    // Assign/reassign agent
+    if (assignedTo !== undefined) {
+      task.assignedTo = assignedTo
+    }
+
+    // Track who claimed the task
+    if (claimedBy !== undefined) {
+      task.claimedBy = claimedBy
+    }
+
+    // Update result
+    if (result !== undefined) {
+      task.result = result
+    }
+
+    // Update error
+    if (error !== undefined) {
+      task.error = error
+    }
+
+    // Add blocker
+    if (addBlocker) {
+      task.blockers.push(addBlocker)
+    }
+
+    // Remove blocker
+    if (removeBlocker) {
+      task.blockers = task.blockers.filter(b => b !== removeBlocker)
+    }
+
+    // Clear all blockers
+    if (clearBlockers) {
+      task.blockers = []
+    }
+
+    // Add comment
+    if (addComment) {
+      task.comments.push({
+        id: generateId(),
+        author: addComment.author || 'system',
+        content: addComment.content,
+        timestamp: new Date().toISOString(),
+        type: addComment.type || 'update'
+      })
+    }
+
+    // Track skill used
+    if (skillUsed !== undefined) {
+      task.skillUsed = skillUsed
     }
 
     return NextResponse.json({ task })
   } catch (error) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
+}
+
+// DELETE - Remove a task
+export async function DELETE(request: NextRequest) {
+  const url = new URL(request.url)
+  const taskId = url.searchParams.get('taskId')
+
+  if (!taskId) {
+    return NextResponse.json({ error: 'taskId required' }, { status: 400 })
+  }
+
+  const deleted = tasks.delete(taskId)
+
+  if (!deleted) {
+    return NextResponse.json({ error: 'Task not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({ success: true })
 }
