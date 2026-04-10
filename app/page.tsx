@@ -122,7 +122,7 @@ function AgentCard({ agent, onChat }: { agent: typeof MOCK_AGENTS[0]; onChat: ()
   )
 }
 
-function TaskRow({ task }: { task: typeof MOCK_TASKS[0] }) {
+function TaskRow({ task }: { task: any }) {
   const priorityColors: Record<string, string> = {
     critical: 'bg-red-600',
     high: 'bg-orange-600',
@@ -131,24 +131,27 @@ function TaskRow({ task }: { task: typeof MOCK_TASKS[0] }) {
   }
   const statusColors: Record<string, string> = {
     pending: 'bg-slate-600',
+    claimed: 'bg-purple-600',
     in_progress: 'bg-blue-600',
     completed: 'bg-emerald-600',
+    failed: 'bg-red-600',
+    blocked: 'bg-red-900',
   }
 
   return (
     <div className="flex items-center gap-4 p-4 bg-slate-800/40 border border-slate-700/50 rounded-lg">
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white truncate">{task.description}</p>
+        <p className="text-sm text-white truncate">{task.title || task.description}</p>
         <p className="text-xs text-slate-500 mt-0.5">
-          {COMPANIES.find(c => c.id === task.company)?.name}
+          {task.type || 'general'} {task.workspaceId ? `• ${task.workspaceId}` : ''}
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${priorityColors[task.priority]}`}>
-          {task.priority}
+        <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${priorityColors[task.priority] || 'bg-slate-600'}`}>
+          {task.priority || 'medium'}
         </span>
-        <span className={`px-2 py-0.5 rounded text-xs text-white ${statusColors[task.status]}`}>
-          {task.status.replace('_', ' ')}
+        <span className={`px-2 py-0.5 rounded text-xs text-white ${statusColors[task.status] || 'bg-slate-600'}`}>
+          {(task.status || 'pending').replace('_', ' ')}
         </span>
       </div>
     </div>
@@ -259,9 +262,33 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'agents' | 'tasks' | 'analytics'>('agents')
   const [chatAgent, setChatAgent] = useState<typeof MOCK_AGENTS[0] | null>(null)
   const [showNewTaskModal, setShowNewTaskModal] = useState(false)
+  const [tasks, setTasks] = useState<any[]>([])
+  const [tasksLoading, setTasksLoading] = useState(false)
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => { setMounted(true) }, [])
+
+  // Fetch tasks from API
+  const fetchTasks = useCallback(async () => {
+    setTasksLoading(true)
+    try {
+      const res = await fetch('/api/prospyr/tasks')
+      if (res.ok) {
+        const data = await res.json()
+        setTasks(data.tasks || [])
+      }
+    } catch (e) {
+      console.error('Failed to fetch tasks:', e)
+    } finally {
+      setTasksLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (mounted && activeTab === 'tasks') {
+      fetchTasks()
+    }
+  }, [mounted, activeTab, fetchTasks])
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -376,9 +403,15 @@ export default function Dashboard() {
                 + New Task
               </button>
             </div>
-            {MOCK_TASKS.map((task) => (
-              <TaskRow key={task.id} task={task} />
-            ))}
+            {tasksLoading ? (
+              <div className="text-slate-400 text-center py-8">Loading tasks...</div>
+            ) : tasks.length === 0 ? (
+              <div className="text-slate-400 text-center py-8">No tasks yet. Create one to get started!</div>
+            ) : (
+              tasks.map((task) => (
+                <TaskRow key={task.id} task={task} />
+              ))
+            )}
           </div>
         )}
 
@@ -434,6 +467,7 @@ export default function Dashboard() {
           onTaskCreated={(task) => {
             console.log('Task created:', task)
             setShowNewTaskModal(false)
+            fetchTasks()
           }}
         />
       )}
