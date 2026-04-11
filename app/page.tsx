@@ -165,6 +165,32 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
   ])
   const [loading, setLoading] = useState(false)
 
+  // Fetch chat history on mount
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const res = await fetch(`/api/chat?agentId=${encodeURIComponent(agent.id)}`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.messages && data.messages.length > 0) {
+            // Filter to only user/assistant messages and map to history format
+            const msgs = data.messages
+              .filter((m: any) => m.role === 'user' || m.role === 'assistant')
+              .map((m: any) => ({ role: m.role, content: m.content }))
+            if (msgs.length > 0) {
+              setHistory(msgs)
+            }
+          }
+        }
+      } catch (e) { console.error('Failed to fetch chat history:', e) }
+    }
+    fetchHistory()
+    
+    // Poll for new messages every 3s
+    const poll = setInterval(fetchHistory, 3000)
+    return () => clearInterval(poll)
+  }, [agent.id])
+
   const handleSend = async () => {
     if (!message.trim() || loading) return
 
@@ -176,7 +202,6 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
     setHistory(prev => [...prev, { role: 'user', content: userMsg }])
 
     try {
-      // Call server-side API route which proxies to the gateway
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -186,9 +211,20 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
       if (!res.ok) throw new Error(`Error: ${res.status}`)
 
       const data = await res.json()
-      const reply = data.reply || data.error || 'No response'
+      
+      // Poll for agent response after a short delay
+      setTimeout(async () => {
+        const historyRes = await fetch(`/api/chat?agentId=${encodeURIComponent(agent.id)}`)
+        if (historyRes.ok) {
+          const historyData = await historyRes.json()
+          const msgs = historyData.messages || []
+          const lastMsg = msgs[msgs.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant') {
+            setHistory(prev => [...prev, { role: 'assistant', content: lastMsg.content }])
+          }
+        }
+      }, 2000)
 
-      setHistory(prev => [...prev, { role: 'agent', content: reply }])
     } catch (error) {
       setHistory(prev => [...prev, { role: 'agent', content: `Error: ${String(error)}` }])
     } finally {
