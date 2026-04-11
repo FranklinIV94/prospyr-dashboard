@@ -1,9 +1,8 @@
 // API route: /api/chat
 // Handles chat messages between dashboard and agents
-// Messages are stored locally and delivered via SSE
+// Messages are stored locally, agent polls for new messages
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sendMessageToAgent } from './prospyr/events/route'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +24,7 @@ interface ChatSession {
 }
 
 // In-memory chat sessions (per deployment)
+// NOTE: In serverless, this resets on each cold start
 const chatSessions: Map<string, ChatSession> = new Map()
 
 function generateId() {
@@ -44,6 +44,9 @@ export async function GET(request: NextRequest) {
   if (!session) {
     return NextResponse.json({ messages: [], session: null })
   }
+
+  // Mark messages as read
+  session.messages.forEach(m => { m.read = true })
 
   return NextResponse.json({
     messages: session.messages,
@@ -79,7 +82,7 @@ export async function POST(request: NextRequest) {
     const session = chatSessions.get(agentId)!
 
     // Create message
-    const message: Message = {
+    const newMessage: Message = {
       id: generateId(),
       agentId,
       role: 'user',
@@ -89,20 +92,13 @@ export async function POST(request: NextRequest) {
       replyTo
     }
 
-    session.messages.push(message)
+    session.messages.push(newMessage)
     session.lastActivity = new Date().toISOString()
 
-    // Try to send via SSE to the agent
-    sendMessageToAgent(agentId, {
-      type: 'chat_message',
-      message,
-      from: 'dashboard'
-    })
-
     return NextResponse.json({
-      message,
+      message: newMessage,
       sessionId: session.id,
-      delivered: true
+      stored: true
     }, { status: 201 })
 
   } catch (error) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Prospyr Agent - Real-time SSE Client
- * Connects to dashboard via SSE, polls for messages
+ * Connects to dashboard via SSE, polls for messages, responds to tasks
  */
 
 const API_BASE = process.env.PROSPYR_DASHBOARD_URL || 'https://control.simplifyingbusinesses.com'
@@ -67,22 +67,32 @@ async function updateTaskStatus(taskId, status, result = null, error = null) {
 
 async function processTask(task) {
   log('task', `Processing: ${task.title || task.description}`)
+  // Simulate processing
   await new Promise(resolve => setTimeout(resolve, 1000))
   return { success: true, output: `Completed: ${task.description}`, timestamp: new Date().toISOString() }
 }
 
 async function pollMessages() {
   try {
+    // Get chat history
     const res = await fetch(`${API_BASE}/api/chat?agentId=${encodeURIComponent(AGENT_ID)}`)
     if (!res.ok) return
     const data = await res.json()
     const messages = data.messages || []
+    
     // Find unread user messages
     const unread = messages.filter(m => m.role === 'user' && !m.read)
     for (const msg of unread) {
       log('chat', `New message: ${msg.content.substring(0, 50)}...`)
+      
       // Send auto-response
-      const response = `[${AGENT_NAME}] Thanks for your message. I'm ${currentTaskId ? 'busy with a task' : 'available'}. How can I help?`
+      const responses = [
+        `Thanks for your message! I'm currently ${currentTaskId ? 'working on a task' : 'available'}.`,
+        `Got your message. I'll get back to you shortly.`,
+        `Message received! How can I help you today?`
+      ]
+      const response = `[${AGENT_NAME}] ${responses[Math.floor(Math.random() * responses.length)]}`
+      
       await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,7 +156,12 @@ process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
 
 async function main() {
-  console.log(`\n${styles.bright}${styles.cyan}╔═══════════════════════════════════════╗\n║  Prospyr Agent - SSE Client            ║\n╠═══════════════════════════════════════╣\n║  Agent: ${AGENT_NAME.padEnd(32)}║\n║  Dashboard: ${API_BASE.substring(0, 30).padEnd(32)}║\n╚═══════════════════════════════════════╝${styles.reset}\n`)
+  console.log(`\n${styles.bright}${styles.cyan}╔═══════════════════════════════════════╗
+║  Prospyr Agent - SSE Client            ║
+╠═══════════════════════════════════════╣
+║  Agent: ${AGENT_NAME.padEnd(32)}║
+║  Dashboard: ${API_BASE.substring(0, 30).padEnd(30)}║
+╚═══════════════════════════════════════╝${styles.reset}\n`)
   
   const registered = await registerAgent()
   if (!registered) { log('error', 'Registration failed'); setTimeout(main, 5000); return }
