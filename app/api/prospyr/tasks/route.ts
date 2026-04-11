@@ -1,20 +1,21 @@
 // API route: /api/prospyr/tasks
 // Create tasks and assign to agents (real-time via SSE)
-// Enhanced with full lifecycle, capabilities, priorities
+// Enhanced with full lifecycle, capabilities, priorities, file persistence
 
 import { NextRequest, NextResponse } from 'next/server'
 import { sendTaskToAgent, getConnectionStatus, getConnectedAgents } from '../events/route'
+import { readJsonFile, writeJsonFile } from '../../../lib/storage'
 
 export const dynamic = 'force-dynamic'
 
 // Task status enum
 enum TaskStatus {
-  PENDING = 'pending',           // Created, waiting for agent
-  CLAIMED = 'claimed',          // Agent picked it up
-  IN_PROGRESS = 'in_progress',  // Working on it
-  COMPLETED = 'completed',       // Successfully done
-  FAILED = 'failed',            // Couldn't complete
-  BLOCKED = 'blocked'           // Waiting on something
+  PENDING = 'pending',
+  CLAIMED = 'claimed',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+  BLOCKED = 'blocked'
 }
 
 // Task priority
@@ -45,7 +46,7 @@ interface TaskComment {
 }
 
 // Enhanced Task interface
-interface Task {
+export interface Task {
   id: string
   title: string
   description: string
@@ -67,19 +68,7 @@ interface Task {
   workspaceId: string | null
 }
 
-// Agent interface (mirrors events/route)
-interface Agent {
-  agentId: string
-  name: string
-  role?: string
-  capabilities: string[]
-  status: 'available' | 'busy' | 'offline'
-  workspaceId?: string
-  tasksCompleted: number
-  registeredAt: string
-}
-
-const tasks: Map<string, Task> = new Map()
+const TASKS_FILE = 'tasks.json'
 
 function generateId() {
   return crypto.randomUUID()
@@ -95,6 +84,17 @@ const priorityOrder: Record<string, number> = {
   'high': 1,
   'medium': 2,
   'low': 3
+}
+
+// File-based task storage
+function getTasks(): Map<string, Task> {
+  const data = readJsonFile<Record<string, Task>>(TASKS_FILE, {})
+  return new Map(Object.entries(data))
+}
+
+function saveTasks(tasks: Map<string, Task>) {
+  const obj = Object.fromEntries(tasks)
+  writeJsonFile(TASKS_FILE, obj)
 }
 
 // GET - List tasks or check connection status
@@ -125,6 +125,8 @@ export async function GET(request: NextRequest) {
     }))
     return NextResponse.json({ agents: agentList })
   }
+
+  const tasks = getTasks()
 
   // Create task via GET (workaround for POST blocking)
   if (action === 'create') {
@@ -163,6 +165,7 @@ export async function GET(request: NextRequest) {
     }
 
     tasks.set(task.id, task)
+    saveTasks(tasks)
 
     // Auto-assign to capable agent if specified
     if (assignTo) {
@@ -225,6 +228,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Description required' }, { status: 400 })
     }
 
+    const tasks = getTasks()
+
     const task: Task = {
       id: generateId(),
       title: title || description.slice(0, 50),
@@ -248,6 +253,7 @@ export async function POST(request: NextRequest) {
     }
 
     tasks.set(task.id, task)
+    saveTasks(tasks)
 
     // Auto-assign to capable agent if specified
     if (assignTo) {
@@ -282,24 +288,15 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'taskId required' }, { status: 400 })
     }
 
+    const tasks = getTasks()
     const task = tasks.get(taskId)
+    
     if (!task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 })
     }
 
     // Update status with lifecycle management
     if (status) {
-      // Validate state transitions
-      const validTransitions: Record<string, string[]> = {
-        [TaskStatus.PENDING]: [TaskStatus.CLAIMED, TaskStatus.BLOCKED],
-        [TaskStatus.CLAIMED]: [TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.FAILED],
-        [TaskStatus.IN_PROGRESS]: [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED],
-        [TaskStatus.BLOCKED]: [TaskStatus.PENDING, TaskStatus.CLAIMED, TaskStatus.IN_PROGRESS],
-        [TaskStatus.FAILED]: [TaskStatus.PENDING], // Can retry
-        [TaskStatus.COMPLETED]: [] // Terminal state
-      }
-
-      // Allow direct transitions for flexibility
       task.status = status
       task.updatedAt = new Date().toISOString()
 
@@ -363,6 +360,9 @@ export async function PATCH(request: NextRequest) {
       task.skillUsed = skillUsed
     }
 
+    tasks.set(taskId, task)
+    saveTasks(tasks)
+
     return NextResponse.json({ task })
   } catch (error) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
@@ -378,7 +378,9 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'taskId required' }, { status: 400 })
   }
 
+  const tasks = getTasks()
   const deleted = tasks.delete(taskId)
+  saveTasks(tasks)
 
   if (!deleted) {
     return NextResponse.json({ error: 'Task not found' }, { status: 404 })

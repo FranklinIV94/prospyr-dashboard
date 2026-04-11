@@ -1,8 +1,8 @@
 // API route: /api/chat
-// Handles chat messages between dashboard and agents
-// Messages are stored locally, agent polls for new messages
+// Handles chat messages with file-based persistence
 
 import { NextRequest, NextResponse } from 'next/server'
+import { readJsonFile, writeJsonFile } from '../../lib/storage'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,12 +23,20 @@ interface ChatSession {
   lastActivity: string
 }
 
-// In-memory chat sessions (per deployment)
-// NOTE: In serverless, this resets on each cold start
-const chatSessions: Map<string, ChatSession> = new Map()
+const CHAT_FILE = 'chat.json'
 
 function generateId() {
   return crypto.randomUUID()
+}
+
+function getSessions(): Map<string, ChatSession> {
+  const data = readJsonFile<Record<string, ChatSession>>(CHAT_FILE, {})
+  return new Map(Object.entries(data))
+}
+
+function saveSessions(sessions: Map<string, ChatSession>) {
+  const obj = Object.fromEntries(sessions)
+  writeJsonFile(CHAT_FILE, obj)
 }
 
 // GET - Get chat history for an agent
@@ -40,13 +48,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'agentId required' }, { status: 400 })
   }
 
-  const session = chatSessions.get(agentId)
+  const sessions = getSessions()
+  const session = sessions.get(agentId)
+  
   if (!session) {
     return NextResponse.json({ messages: [], session: null })
   }
 
   // Mark messages as read
   session.messages.forEach(m => { m.read = true })
+  sessions.set(agentId, session)
+  saveSessions(sessions)
 
   return NextResponse.json({
     messages: session.messages,
@@ -68,10 +80,11 @@ export async function POST(request: NextRequest) {
     }
 
     const messageContent = content || message
+    const sessions = getSessions()
 
     // Create session if doesn't exist
-    if (!chatSessions.has(agentId)) {
-      chatSessions.set(agentId, {
+    if (!sessions.has(agentId)) {
+      sessions.set(agentId, {
         id: generateId(),
         agentId,
         messages: [],
@@ -79,7 +92,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const session = chatSessions.get(agentId)!
+    const session = sessions.get(agentId)!
 
     // Create message
     const newMessage: Message = {
@@ -94,6 +107,8 @@ export async function POST(request: NextRequest) {
 
     session.messages.push(newMessage)
     session.lastActivity = new Date().toISOString()
+    sessions.set(agentId, session)
+    saveSessions(sessions)
 
     return NextResponse.json({
       message: newMessage,
@@ -106,7 +121,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PUT - Agent responds to a message (called by agent SSE client)
+// PUT - Agent responds to a message
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
@@ -116,7 +131,9 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
 
-    const session = chatSessions.get(agentId)
+    const sessions = getSessions()
+    const session = sessions.get(agentId)
+    
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
@@ -134,6 +151,8 @@ export async function PUT(request: NextRequest) {
 
     session.messages.push(response)
     session.lastActivity = new Date().toISOString()
+    sessions.set(agentId, session)
+    saveSessions(sessions)
 
     return NextResponse.json({ message: response })
   } catch (error) {
