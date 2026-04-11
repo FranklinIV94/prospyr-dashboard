@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Prospyr Agent - Real-time SSE Client
- * Connects to dashboard via SSE, polls for messages, responds to tasks
+ * Prospyr Agent - Polling Client
+ * Polls dashboard for tasks and messages instead of SSE
  */
 
 const API_BASE = process.env.PROSPYR_DASHBOARD_URL || 'https://control.simplifyingbusinesses.com'
@@ -12,10 +12,6 @@ const AGENT_CAPABILITIES = (process.env.PROSPYR_AGENT_CAPABILITIES || 'security-
 const { EventSource } = require('eventsource')
 global.EventSource = EventSource
 
-let eventSource = null
-let isConnected = false
-let reconnectAttempts = 0
-const MAX_RECONNECT_DELAY = 30000
 let currentTaskId = null
 
 const styles = {
@@ -26,7 +22,7 @@ const styles = {
 
 function log(type, ...args) {
   const timestamp = new Date().toISOString()
-  const icons = { info: 'ℹ️', success: '✅', warn: '⚠️', error: '❌', task: '📋', chat: '💬', sse: '🔌', heartbeat: '💓' }
+  const icons = { info: 'ℹ️', success: '✅', warn: '⚠️', error: '❌', task: '📋', chat: '💬', poll: '🔄' }
   console.log(`${styles.dim}[${timestamp}]${styles.reset} ${icons[type] || '•'} ${styles.cyan}[${AGENT_NAME}]${styles.reset}`, ...args)
 }
 
@@ -67,31 +63,23 @@ async function updateTaskStatus(taskId, status, result = null, error = null) {
 
 async function processTask(task) {
   log('task', `Processing: ${task.title || task.description}`)
-  // Simulate processing
-  await new Promise(resolve => setTimeout(resolve, 1000))
+  await new Promise(resolve => setTimeout(resolve, 2000))
   return { success: true, output: `Completed: ${task.description}`, timestamp: new Date().toISOString() }
 }
 
 async function pollMessages() {
   try {
-    // Get chat history
     const res = await fetch(`${API_BASE}/api/chat?agentId=${encodeURIComponent(AGENT_ID)}`)
     if (!res.ok) return
     const data = await res.json()
     const messages = data.messages || []
-    
-    // Find unread user messages
     const unread = messages.filter(m => m.role === 'user' && !m.read)
+    
     for (const msg of unread) {
-      log('chat', `New message: ${msg.content.substring(0, 50)}...`)
+      log('chat', `Message: ${msg.content.substring(0, 50)}...`)
       
-      // Send auto-response
-      const responses = [
-        `Thanks for your message! I'm currently ${currentTaskId ? 'working on a task' : 'available'}.`,
-        `Got your message. I'll get back to you shortly.`,
-        `Message received! How can I help you today?`
-      ]
-      const response = `[${AGENT_NAME}] ${responses[Math.floor(Math.random() * responses.length)]}`
+      // Simple auto-response
+      const response = `[${AGENT_NAME}] Got your message! I'm ${currentTaskId ? 'busy with a task' : 'available'}. I'll respond shortly.`
       
       await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
@@ -103,51 +91,36 @@ async function pollMessages() {
   } catch (error) { log('warn', `Poll error: ${error.message}`) }
 }
 
-function handleEvent(event) {
-  const data = typeof event === 'string' ? JSON.parse(event) : event
-  log('sse', `Event: ${data.type}`)
-  switch (data.type) {
-    case 'connected': isConnected = true; reconnectAttempts = 0; log('success', 'Connected'); sendHeartbeat('available'); break
-    case 'new_task': handleNewTask(data.task); break
-    case 'chat_message': log('chat', `Dashboard message: ${data.message?.content}`); break
-    case 'ping': break
-    default: log('warn', `Unknown: ${data.type}`)
-  }
-}
-
-async function handleNewTask(task) {
-  log('task', `New task: ${task.id}`)
-  currentTaskId = task.id
+async function pollTasks() {
   try {
-    await updateTaskStatus(task.id, 'in_progress')
-    const result = await processTask(task)
-    await updateTaskStatus(task.id, 'completed', JSON.stringify(result))
-    log('success', 'Task completed')
-  } catch (error) {
-    log('error', `Task failed: ${error.message}`)
-    await updateTaskStatus(task.id, 'failed', null, error.message)
-  }
-  sendHeartbeat('available')
-}
-
-function connect() {
-  const sseUrl = `${API_BASE}/api/prospyr/events?agentId=${encodeURIComponent(AGENT_ID)}`
-  log('info', `Connecting to SSE...`)
-  eventSource = new EventSource(sseUrl)
-  eventSource.onopen = () => { isConnected = true; reconnectAttempts = 0; log('success', 'SSE connected') }
-  eventSource.onmessage = (event) => { if (event.data && !event.data.startsWith(':')) handleEvent(event.data) }
-  eventSource.onerror = () => {
-    log('error', 'SSE error'); isConnected = false; eventSource.close()
-    reconnectAttempts++
-    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY)
-    log('warn', `Reconnecting in ${delay}ms...`)
-    setTimeout(connect, delay)
-  }
+    const res = await fetch(`${API_BASE}/api/prospyr/tasks?status=pending`)
+    if (!res.ok) return
+    const data = await res.json()
+    const tasks = data.tasks || []
+    
+    for (const task of tasks) {
+      if (!currentTaskId && task.status === 'pending') {
+        log('task', `New task: ${task.id} - ${task.title || task.description}`)
+        currentTaskId = task.id
+        
+        try {
+          await updateTaskStatus(task.id, 'in_progress')
+          const result = await processTask(task)
+          await updateTaskStatus(task.id, 'completed', JSON.stringify(result))
+          log('success', `Task completed`)
+        } catch (error) {
+          log('error', `Task failed: ${error.message}`)
+          await updateTaskStatus(task.id, 'failed', null, error.message)
+        }
+        
+        currentTaskId = null
+      }
+    }
+  } catch (error) { log('warn', `Task poll error: ${error.message}`) }
 }
 
 async function shutdown() {
   log('warn', 'Shutting down...')
-  if (eventSource) eventSource.close()
   await sendHeartbeat('offline')
   process.exit(0)
 }
@@ -157,7 +130,7 @@ process.on('SIGTERM', shutdown)
 
 async function main() {
   console.log(`\n${styles.bright}${styles.cyan}╔═══════════════════════════════════════╗
-║  Prospyr Agent - SSE Client            ║
+║  Prospyr Agent - Polling Client        ║
 ╠═══════════════════════════════════════╣
 ║  Agent: ${AGENT_NAME.padEnd(32)}║
 ║  Dashboard: ${API_BASE.substring(0, 30).padEnd(30)}║
@@ -166,15 +139,20 @@ async function main() {
   const registered = await registerAgent()
   if (!registered) { log('error', 'Registration failed'); setTimeout(main, 5000); return }
   
-  connect()
+  // Poll for messages every 5s
+  setInterval(pollMessages, 5000)
+  
+  // Poll for tasks every 5s
+  setInterval(pollTasks, 5000)
   
   // Heartbeat every 30s
-  setInterval(() => { if (isConnected) sendHeartbeat(currentTaskId ? 'busy' : 'available') }, 30000)
+  setInterval(() => sendHeartbeat(currentTaskId ? 'busy' : 'available'), 30000)
   
-  // Poll for messages every 5s
-  setInterval(() => { if (isConnected) pollMessages() }, 5000)
+  log('success', 'Agent running. Polling every 5s. Ctrl+C to stop.')
   
-  log('success', 'Agent running. Ctrl+C to stop.')
+  // Initial poll
+  pollMessages()
+  pollTasks()
 }
 
 main()
