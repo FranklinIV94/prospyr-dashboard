@@ -1,10 +1,11 @@
 // API route: /api/prospyr/tasks
 // Create tasks and assign to agents (real-time via SSE)
-// Enhanced with full lifecycle, capabilities, priorities, file persistence
+// Enhanced with full lifecycle, capabilities, priorities, and DB persistence
 
 import { NextRequest, NextResponse } from 'next/server'
 import { sendTaskToAgent, getConnectionStatus, getConnectedAgents } from '../events/route'
 import { readJsonFile, writeJsonFile } from '../../../lib/storage'
+import { getTasks, createTask, updateTask, deleteTask } from '../../../lib/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -86,15 +87,65 @@ const priorityOrder: Record<string, number> = {
   'low': 3
 }
 
-// File-based task storage
-function getTasks(): Map<string, Task> {
+// File-based task storage (fallback)
+function getTasksMap(): Map<string, Task> {
   const data = readJsonFile<Record<string, Task>>(TASKS_FILE, {})
   return new Map(Object.entries(data))
 }
 
-function saveTasks(tasks: Map<string, Task>) {
+function saveTasksMap(tasks: Map<string, Task>) {
   const obj = Object.fromEntries(tasks)
   writeJsonFile(TASKS_FILE, obj)
+}
+
+// Convert DB task to API format
+function dbTaskToApi(dbTask: any): Task {
+  return {
+    id: dbTask.id,
+    title: dbTask.title,
+    description: dbTask.description,
+    type: dbTask.type,
+    priority: dbTask.priority,
+    status: dbTask.status,
+    assignedTo: dbTask.assigned_to,
+    claimedBy: dbTask.claimed_by,
+    createdAt: dbTask.created_at,
+    updatedAt: dbTask.updated_at,
+    startedAt: dbTask.started_at,
+    completedAt: dbTask.completed_at,
+    result: dbTask.result,
+    error: dbTask.error,
+    blockers: dbTask.blockers || [],
+    comments: dbTask.comments || [],
+    requiredCapabilities: dbTask.required_capabilities || [],
+    skillUsed: dbTask.skill_used,
+    workspaceId: dbTask.workspace_id
+  }
+}
+
+// Convert API task to DB format
+function apiTaskToDb(task: Task): any {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    type: task.type,
+    priority: task.priority,
+    status: task.status,
+    assigned_to: task.assignedTo,
+    claimed_by: task.claimedBy,
+    created_at: task.createdAt,
+    updated_at: task.updatedAt,
+    started_at: task.startedAt,
+    completed_at: task.completedAt,
+    result: task.result,
+    error: task.error,
+    blockers: task.blockers,
+    comments: task.comments,
+    required_capabilities: task.requiredCapabilities,
+    skill_used: task.skillUsed,
+    workspace_id: task.workspaceId
+  }
 }
 
 // GET - List tasks or check connection status
@@ -102,9 +153,6 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const status = url.searchParams.get('status')
   const agentId = url.searchParams.get('agentId')
-  const taskType = url.searchParams.get('type')
-  const priority = url.searchParams.get('priority')
-  const workspaceId = url.searchParams.get('workspaceId')
   const action = url.searchParams.get('action')
 
   // Connection status for agents
@@ -126,76 +174,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ agents: agentList })
   }
 
-  const tasks = getTasks()
-
-  // Create task via GET (workaround for POST blocking)
-  if (action === 'create') {
-    const title = url.searchParams.get('title')
-    const description = url.searchParams.get('description')
-    const type = url.searchParams.get('type') || TaskType.GENERAL
-    const priorityVal = url.searchParams.get('priority') || TaskPriority.MEDIUM
-    const assignTo = url.searchParams.get('assignTo')
-    const requiredCapabilities = url.searchParams.get('capabilities')?.split(',').filter(Boolean) || []
-    const workspace = url.searchParams.get('workspaceId')
-
-    if (!description) {
-      return NextResponse.json({ error: 'Description required' }, { status: 400 })
-    }
-
-    const task: Task = {
-      id: generateId(),
-      title: title || description.slice(0, 50),
-      description,
-      type,
-      priority: priorityVal,
-      status: TaskStatus.PENDING,
-      assignedTo: null,
-      claimedBy: assignTo || null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      startedAt: null,
-      completedAt: null,
-      result: null,
-      error: null,
-      blockers: [],
-      comments: [],
-      requiredCapabilities,
-      skillUsed: null,
-      workspaceId: workspace || null
-    }
-
-    tasks.set(task.id, task)
-    saveTasks(tasks)
-
-    // Auto-assign to capable agent if specified
-    if (assignTo) {
-      sendTaskToAgent(assignTo, task)
-    }
-
-    return NextResponse.json({ task }, { status: 201 })
+  // Try database first
+  const dbTasks = await getTasks({ status: status || undefined, agentId: agentId || undefined })
+  
+  if (dbTasks !== null) {
+    return NextResponse.json({ tasks: dbTasks.map(dbTaskToApi) })
   }
 
-  // Get tasks assigned to specific agent
-  if (agentId) {
-    const agentTasks = Array.from(tasks.values()).filter(t => t.assignedTo === agentId)
-    return NextResponse.json({ tasks: agentTasks })
-  }
-
-  // Filter by multiple criteria
+  // Fallback to file storage
+  const tasks = getTasksMap()
   let taskList = Array.from(tasks.values())
 
   if (status) {
     const statuses = status.split(',')
     taskList = taskList.filter(t => statuses.includes(t.status))
   }
-  if (taskType) {
-    taskList = taskList.filter(t => t.type === taskType)
-  }
-  if (priority) {
-    taskList = taskList.filter(t => t.priority === priority)
-  }
-  if (workspaceId) {
-    taskList = taskList.filter(t => t.workspaceId === workspaceId)
+  if (agentId) {
+    taskList = taskList.filter(t => t.assignedTo === agentId)
   }
 
   // Sort by priority, then by creation date
@@ -208,7 +203,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ tasks: taskList })
 }
 
-// POST - Create a new task (standard REST)
+// POST - Create a new task
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -227,8 +222,6 @@ export async function POST(request: NextRequest) {
     if (!description) {
       return NextResponse.json({ error: 'Description required' }, { status: 400 })
     }
-
-    const tasks = getTasks()
 
     const task: Task = {
       id: generateId(),
@@ -252,10 +245,19 @@ export async function POST(request: NextRequest) {
       workspaceId: workspaceId || null
     }
 
-    tasks.set(task.id, task)
-    saveTasks(tasks)
+    // Try database first
+    const dbResult = await createTask(apiTaskToDb(task))
+    
+    if (dbResult !== null) {
+      sendTaskToAgent(assignTo, dbTaskToApi(dbResult))
+      return NextResponse.json({ task: dbTaskToApi(dbResult) }, { status: 201 })
+    }
 
-    // Auto-assign to capable agent if specified
+    // Fallback to file storage
+    const tasks = getTasksMap()
+    tasks.set(task.id, task)
+    saveTasksMap(tasks)
+
     if (assignTo) {
       sendTaskToAgent(assignTo, task)
     }
@@ -266,7 +268,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PATCH - Update task status, add comments, manage blockers
+// PATCH - Update task status
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
@@ -288,19 +290,42 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'taskId required' }, { status: 400 })
     }
 
-    const tasks = getTasks()
+    const updates: any = {}
+
+    if (status) {
+      updates.status = status
+      updates.updated_at = new Date().toISOString()
+      if (status === 'in_progress') {
+        updates.started_at = new Date().toISOString()
+      }
+      if (status === 'completed' || status === 'failed') {
+        updates.completed_at = new Date().toISOString()
+      }
+    }
+    if (result !== undefined) updates.result = result
+    if (error !== undefined) updates.error = error
+    if (assignedTo !== undefined) updates.assigned_to = assignedTo
+    if (claimedBy !== undefined) updates.claimed_by = claimedBy
+    if (skillUsed !== undefined) updates.skill_used = skillUsed
+
+    // Try database first
+    const dbResult = await updateTask(taskId, updates)
+    
+    if (dbResult !== null) {
+      return NextResponse.json({ task: dbTaskToApi(dbResult) })
+    }
+
+    // Fallback to file storage
+    const tasks = getTasksMap()
     const task = tasks.get(taskId)
     
     if (!task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 })
     }
 
-    // Update status with lifecycle management
     if (status) {
       task.status = status
       task.updatedAt = new Date().toISOString()
-
-      // Track lifecycle timestamps
       if (status === TaskStatus.IN_PROGRESS && !task.startedAt) {
         task.startedAt = new Date().toISOString()
       }
@@ -308,43 +333,14 @@ export async function PATCH(request: NextRequest) {
         task.completedAt = new Date().toISOString()
       }
     }
-
-    // Assign/reassign agent
-    if (assignedTo !== undefined) {
-      task.assignedTo = assignedTo
-    }
-
-    // Track who claimed the task
-    if (claimedBy !== undefined) {
-      task.claimedBy = claimedBy
-    }
-
-    // Update result
-    if (result !== undefined) {
-      task.result = result
-    }
-
-    // Update error
-    if (error !== undefined) {
-      task.error = error
-    }
-
-    // Add blocker
-    if (addBlocker) {
-      task.blockers.push(addBlocker)
-    }
-
-    // Remove blocker
-    if (removeBlocker) {
-      task.blockers = task.blockers.filter(b => b !== removeBlocker)
-    }
-
-    // Clear all blockers
-    if (clearBlockers) {
-      task.blockers = []
-    }
-
-    // Add comment
+    if (result !== undefined) task.result = result
+    if (error !== undefined) task.error = error
+    if (assignedTo !== undefined) task.assignedTo = assignedTo
+    if (claimedBy !== undefined) task.claimedBy = claimedBy
+    if (skillUsed !== undefined) task.skillUsed = skillUsed
+    if (addBlocker) task.blockers.push(addBlocker)
+    if (removeBlocker) task.blockers = task.blockers.filter(b => b !== removeBlocker)
+    if (clearBlockers) task.blockers = []
     if (addComment) {
       task.comments.push({
         id: generateId(),
@@ -354,14 +350,10 @@ export async function PATCH(request: NextRequest) {
         type: addComment.type || 'update'
       })
     }
-
-    // Track skill used
-    if (skillUsed !== undefined) {
-      task.skillUsed = skillUsed
-    }
+    if (skillUsed !== undefined) task.skillUsed = skillUsed
 
     tasks.set(taskId, task)
-    saveTasks(tasks)
+    saveTasksMap(tasks)
 
     return NextResponse.json({ task })
   } catch (error) {
@@ -378,9 +370,17 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'taskId required' }, { status: 400 })
   }
 
-  const tasks = getTasks()
+  // Try database first
+  const dbResult = await deleteTask(taskId)
+  
+  if (dbResult !== null) {
+    return NextResponse.json({ success: true })
+  }
+
+  // Fallback to file storage
+  const tasks = getTasksMap()
   const deleted = tasks.delete(taskId)
-  saveTasks(tasks)
+  saveTasksMap(tasks)
 
   if (!deleted) {
     return NextResponse.json({ error: 'Task not found' }, { status: 404 })

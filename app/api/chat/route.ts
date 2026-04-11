@@ -1,8 +1,9 @@
 // API route: /api/chat
-// Handles chat messages with file-based persistence
+// Handles chat messages with Supabase database persistence
 
 import { NextRequest, NextResponse } from 'next/server'
 import { readJsonFile, writeJsonFile } from '../../lib/storage'
+import { getMessages, createMessage, markMessagesRead } from '../../lib/database'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,25 +17,19 @@ interface Message {
   replyTo?: string
 }
 
-interface ChatSession {
-  id: string
-  agentId: string
-  messages: Message[]
-  lastActivity: string
-}
-
 const CHAT_FILE = 'chat.json'
 
 function generateId() {
   return crypto.randomUUID()
 }
 
-function getSessions(): Map<string, ChatSession> {
-  const data = readJsonFile<Record<string, ChatSession>>(CHAT_FILE, {})
+// File-based sessions (fallback)
+function getSessions(): Map<string, any> {
+  const data = readJsonFile<Record<string, any>>(CHAT_FILE, {})
   return new Map(Object.entries(data))
 }
 
-function saveSessions(sessions: Map<string, ChatSession>) {
+function saveSessions(sessions: Map<string, any>) {
   const obj = Object.fromEntries(sessions)
   writeJsonFile(CHAT_FILE, obj)
 }
@@ -48,6 +43,26 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'agentId required' }, { status: 400 })
   }
 
+  // Try database first
+  const dbMessages = await getMessages(agentId)
+  
+  if (dbMessages !== null) {
+    await markMessagesRead(agentId)
+    return NextResponse.json({
+      messages: dbMessages.map((m: any) => ({
+        id: m.id,
+        agentId: m.agent_id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        read: m.read,
+        replyTo: m.reply_to
+      })),
+      session: { agentId, lastActivity: new Date().toISOString() }
+    })
+  }
+
+  // Fallback to file storage
   const sessions = getSessions()
   const session = sessions.get(agentId)
   
@@ -55,8 +70,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ messages: [], session: null })
   }
 
-  // Mark messages as read
-  session.messages.forEach(m => { m.read = true })
+  session.messages.forEach((m: Message) => { m.read = true })
   sessions.set(agentId, session)
   saveSessions(sessions)
 
@@ -80,9 +94,44 @@ export async function POST(request: NextRequest) {
     }
 
     const messageContent = content || message
+
+    const newMessage = {
+      id: generateId(),
+      agent_id: agentId,
+      role: 'user',
+      content: messageContent,
+      timestamp: new Date().toISOString(),
+      read: false,
+      reply_to: replyTo || null
+    }
+
+    // Try database first
+    const dbResult = await createMessage({
+      agent_id: agentId,
+      role: 'user',
+      content: messageContent,
+      read: false,
+      reply_to: replyTo || null
+    })
+    
+    if (dbResult !== null) {
+      return NextResponse.json({
+        message: {
+          id: dbResult.id,
+          agentId: dbResult.agent_id,
+          role: dbResult.role,
+          content: dbResult.content,
+          timestamp: dbResult.timestamp,
+          read: dbResult.read,
+          replyTo: dbResult.reply_to
+        },
+        stored: true
+      }, { status: 201 })
+    }
+
+    // Fallback to file storage
     const sessions = getSessions()
 
-    // Create session if doesn't exist
     if (!sessions.has(agentId)) {
       sessions.set(agentId, {
         id: generateId(),
@@ -93,18 +142,6 @@ export async function POST(request: NextRequest) {
     }
 
     const session = sessions.get(agentId)!
-
-    // Create message
-    const newMessage: Message = {
-      id: generateId(),
-      agentId,
-      role: 'user',
-      content: messageContent,
-      timestamp: new Date().toISOString(),
-      read: false,
-      replyTo
-    }
-
     session.messages.push(newMessage)
     session.lastActivity = new Date().toISOString()
     sessions.set(agentId, session)
@@ -112,7 +149,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       message: newMessage,
-      sessionId: session.id,
       stored: true
     }, { status: 201 })
 
@@ -131,22 +167,45 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
 
+    const response = {
+      id: generateId(),
+      agent_id: agentId,
+      role: 'assistant',
+      content,
+      timestamp: new Date().toISOString(),
+      read: false,
+      reply_to: messageId || null
+    }
+
+    // Try database first
+    const dbResult = await createMessage({
+      agent_id: agentId,
+      role: 'assistant',
+      content,
+      read: false,
+      reply_to: messageId || null
+    })
+    
+    if (dbResult !== null) {
+      return NextResponse.json({ 
+        message: {
+          id: dbResult.id,
+          agentId: dbResult.agent_id,
+          role: dbResult.role,
+          content: dbResult.content,
+          timestamp: dbResult.timestamp,
+          read: dbResult.read,
+          replyTo: dbResult.reply_to
+        }
+      })
+    }
+
+    // Fallback to file storage
     const sessions = getSessions()
     const session = sessions.get(agentId)
     
     if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
-    }
-
-    // Create response message
-    const response: Message = {
-      id: generateId(),
-      agentId,
-      role: 'assistant',
-      content,
-      timestamp: new Date().toISOString(),
-      read: false,
-      replyTo: messageId
     }
 
     session.messages.push(response)
