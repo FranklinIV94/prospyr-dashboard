@@ -83,6 +83,20 @@ node agent-sse.js
 
 The agent polls for messages and responds via the chat API.
 
+## Agent Code (Experimental)
+
+The `agents/` and `orchestrator/` folders contain experimental multi-agent orchestration code. Not currently deployed.
+
+
+```
+├── agents/
+│   ├── BaseAgent.ts           # Base agent class
+│   ├── specialists/          # Specialist agent implementations
+│   └── supervisor/           # Supervisor agent
+└── orchestrator/
+    └── Orchestrator.ts       # Multi-agent orchestration logic
+```
+
 ## Tech Stack
 
 - **Frontend**: Next.js 14, Tailwind CSS, TypeScript
