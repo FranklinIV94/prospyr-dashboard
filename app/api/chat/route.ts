@@ -13,12 +13,6 @@ export async function GET(request: NextRequest) {
   const agentId = url.searchParams.get('agentId')
   const responseId = url.searchParams.get('responseId')
 
-  // Agent polling for messages
-  if (agentId) {
-    const messages = getMessages(agentId)
-    return NextResponse.json({ messages })
-  }
-
   // Dashboard checking for a response to a specific message
   if (responseId) {
     const response = getResponse(responseId)
@@ -26,6 +20,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ response })
     }
     return NextResponse.json({ response: null })
+  }
+
+  // Agent polling for messages
+  if (agentId) {
+    const messages = getMessages(agentId)
+    return NextResponse.json({ messages })
   }
 
   return NextResponse.json({ error: 'agentId or responseId required' }, { status: 400 })
