@@ -86,15 +86,12 @@ async function pollMessages() {
       ]
       const response = `[${AGENT_NAME}] ${responses[Math.floor(Math.random() * responses.length)]}`
       
-      // Send response
+      // Send response directly via POST
       await fetch(`${API_BASE}/api/chat`, {
-        method: 'PUT',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId: msg.id, content: response })
+        body: JSON.stringify({ agentId: AGENT_ID, role: 'assistant', content: response, messageId: msg.id })
       })
-      
-      // Mark as processed
-      await fetch(`${API_BASE}/api/chat?messageId=${msg.id}`, { method: 'DELETE' })
       
       log('chat', 'Response sent')
     }

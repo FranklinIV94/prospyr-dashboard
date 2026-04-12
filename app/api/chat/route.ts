@@ -32,17 +32,25 @@ export async function GET(request: NextRequest) {
 }
 
 // POST - User sends message (dashboard -> queue)
+// OR agent sends response (polls queue, posts response here)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { agentId, content } = body
+    const { agentId, content, role, messageId } = body
 
     if (!agentId || !content) {
       return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
     }
 
-    const messageId = addMessage(agentId, content)
+    // Agent responding to a message
+    if (role === 'assistant') {
+      const responseId = messageId || crypto.randomUUID()
+      addResponse(responseId, content)
+      return NextResponse.json({ success: true, responseId }), { status: 201 }
+    }
 
+    // User sending a message
+    const messageId = addMessage(agentId, content)
     return NextResponse.json({
       success: true,
       messageId,
