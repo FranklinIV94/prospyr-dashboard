@@ -164,32 +164,29 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
     { role: 'agent', content: `Hello, I'm ${agent.name}. How can I assist you today?` }
   ])
   const [loading, setLoading] = useState(false)
+  const [lastMessageId, setLastMessageId] = useState<string | null>(null)
 
-  // Fetch chat history on mount
+  // Poll for agent responses
   useEffect(() => {
-    const fetchHistory = async () => {
+    if (!lastMessageId) return
+    
+    const pollResponse = async () => {
       try {
-        const res = await fetch(`/api/chat?agentId=${encodeURIComponent(agent.id)}`)
+        const res = await fetch(`/api/chat?responseId=${encodeURIComponent(lastMessageId)}`)
         if (res.ok) {
           const data = await res.json()
-          if (data.messages && data.messages.length > 0) {
-            // Filter to only user/assistant messages and map to history format
-            const msgs = data.messages
-              .filter((m: any) => m.role === 'user' || m.role === 'assistant')
-              .map((m: any) => ({ role: m.role, content: m.content }))
-            if (msgs.length > 0) {
-              setHistory(msgs)
-            }
+          if (data.response) {
+            setHistory(prev => [...prev, { role: 'assistant', content: data.response.content }])
+            setLastMessageId(null) // Response received, stop polling
           }
         }
-      } catch (e) { console.error('Failed to fetch chat history:', e) }
+      } catch (e) { console.error('Poll error:', e) }
     }
-    fetchHistory()
     
-    // Poll for new messages every 3s
-    const poll = setInterval(fetchHistory, 3000)
-    return () => clearInterval(poll)
-  }, [agent.id])
+    // Poll every 2 seconds until response received
+    const interval = setInterval(pollResponse, 2000)
+    return () => clearInterval(interval)
+  }, [lastMessageId])
 
   const handleSend = async () => {
     if (!message.trim() || loading) return
@@ -205,25 +202,13 @@ function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: 
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: agent.id, message: userMsg }),
+        body: JSON.stringify({ agentId: agent.id, content: userMsg }),
       })
 
       if (!res.ok) throw new Error(`Error: ${res.status}`)
 
       const data = await res.json()
-      
-      // Poll for agent response after a short delay
-      setTimeout(async () => {
-        const historyRes = await fetch(`/api/chat?agentId=${encodeURIComponent(agent.id)}`)
-        if (historyRes.ok) {
-          const historyData = await historyRes.json()
-          const msgs = historyData.messages || []
-          const lastMsg = msgs[msgs.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant') {
-            setHistory(prev => [...prev, { role: 'assistant', content: lastMsg.content }])
-          }
-        }
-      }, 2000)
+      setLastMessageId(data.messageId) // Start polling for response
 
     } catch (error) {
       setHistory(prev => [...prev, { role: 'agent', content: `Error: ${String(error)}` }])

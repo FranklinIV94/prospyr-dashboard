@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Prospyr Agent - Polling Client
- * Polls dashboard for tasks and messages instead of SSE
+ * Prospyr Agent - Simple Queue-Based Client
+ * Polls for messages, responds directly
  */
 
 const API_BASE = process.env.PROSPYR_DASHBOARD_URL || 'https://control.simplifyingbusinesses.com'
@@ -69,23 +69,33 @@ async function processTask(task) {
 
 async function pollMessages() {
   try {
+    // Poll for messages addressed to this agent
     const res = await fetch(`${API_BASE}/api/chat?agentId=${encodeURIComponent(AGENT_ID)}`)
     if (!res.ok) return
     const data = await res.json()
     const messages = data.messages || []
-    const unread = messages.filter(m => m.role === 'user' && !m.read)
     
-    for (const msg of unread) {
-      log('chat', `Message: ${msg.content.substring(0, 50)}...`)
+    for (const msg of messages) {
+      log('chat', `New message: ${msg.content.substring(0, 50)}...`)
       
-      // Simple auto-response
-      const response = `[${AGENT_NAME}] Got your message! I'm ${currentTaskId ? 'busy with a task' : 'available'}. I'll respond shortly.`
+      // Generate response
+      const responses = [
+        `Got your message! I'm ${currentTaskId ? 'busy with a task' : 'available'} and ready to help.`,
+        `Message received. How can I assist you today?`,
+        `I'm here and ready to help. What's on your mind?`
+      ]
+      const response = `[${AGENT_NAME}] ${responses[Math.floor(Math.random() * responses.length)]}`
       
+      // Send response
       await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: AGENT_ID, content: response, replyTo: msg.id })
+        body: JSON.stringify({ messageId: msg.id, content: response })
       })
+      
+      // Mark as processed
+      await fetch(`${API_BASE}/api/chat?messageId=${msg.id}`, { method: 'DELETE' })
+      
       log('chat', 'Response sent')
     }
   } catch (error) { log('warn', `Poll error: ${error.message}`) }
@@ -130,7 +140,7 @@ process.on('SIGTERM', shutdown)
 
 async function main() {
   console.log(`\n${styles.bright}${styles.cyan}╔═══════════════════════════════════════╗
-║  Prospyr Agent - Polling Client        ║
+║  Prospyr Agent - Simple Queue Client    ║
 ╠═══════════════════════════════════════╣
 ║  Agent: ${AGENT_NAME.padEnd(32)}║
 ║  Dashboard: ${API_BASE.substring(0, 30).padEnd(30)}║
@@ -139,18 +149,14 @@ async function main() {
   const registered = await registerAgent()
   if (!registered) { log('error', 'Registration failed'); setTimeout(main, 5000); return }
   
-  // Poll for messages every 5s
+  // Poll every 5 seconds
   setInterval(pollMessages, 5000)
-  
-  // Poll for tasks every 5s
   setInterval(pollTasks, 5000)
-  
-  // Heartbeat every 30s
   setInterval(() => sendHeartbeat(currentTaskId ? 'busy' : 'available'), 30000)
   
-  log('success', 'Agent running. Polling every 5s. Ctrl+C to stop.')
+  log('success', 'Agent running. Ctrl+C to stop.')
   
-  // Initial poll
+  // Initial polls
   pollMessages()
   pollTasks()
 }
