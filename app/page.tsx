@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 interface Agent {
   id: string
@@ -29,13 +29,7 @@ interface PlatformStats {
     completed: number
     failed: number
   }
-  agents: Array<{
-    id: string
-    name: string
-    role: string
-    status: string
-    activeTasks: number
-  }>
+  agents: Agent[]
 }
 
 type Tab = 'dashboard' | 'agents' | 'tasks' | 'submit'
@@ -195,12 +189,14 @@ function SubmitTask({ onSubmit }: { onSubmit: (task: string, type: string, prior
 
 export default function ProspyrDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard')
-  const [stats, setStats] = useState<PlatformStats | null>(null)
   const [agents, setAgents] = useState<Agent[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
+  const [stats, setStats] = useState({ totalTasks: 0, pending: 0, running: 0, completed: 0, failed: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+  const [sseConnected, setSseConnected] = useState(false)
+  const eventSourceRef = useRef<EventSource | null>(null)
 
   const API = process.env.NEXT_PUBLIC_PROSPYR_API || '/api/prospyr'
 
@@ -213,7 +209,7 @@ export default function ProspyrDashboard() {
 
       if (statsRes?.ok) {
         const statsData = await statsRes.json()
-        setStats(statsData)
+        setStats(statsData.stats || { totalTasks: 0, pending: 0, running: 0, completed: 0, failed: 0 })
         setAgents(statsData.agents || [])
       }
 
@@ -231,9 +227,117 @@ export default function ProspyrDashboard() {
     }
   }, [API])
 
+  // SSE connection for real-time updates
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    let reconnectTimeout: ReturnType<typeof setTimeout>
+    let heartbeatTimer: ReturnType<typeof setInterval>
+
+    function connect() {
+      const url = `${window.location.origin}${API}/events?agentId=dashboard&name=Dashboard`
+      const eventSource = new EventSource(url)
+      eventSourceRef.current = eventSource
+
+      eventSource.onopen = () => {
+        setSseConnected(true)
+        setError(null)
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          handleSSEEvent(data)
+        } catch {
+          // ignore malformed events
+        }
+      }
+
+      eventSource.onerror = () => {
+        setSseConnected(false)
+        eventSource.close()
+        eventSourceRef.current = null
+        // Reconnect after 5 seconds
+        reconnectTimeout = setTimeout(connect, 5000)
+      }
+    }
+
+    function handleSSEEvent(data: any) {
+      switch (data.type) {
+        case 'connected':
+        case 'agent_registered': {
+          setAgents(prev => {
+            const exists = prev.find(a => a.id === data.agentId)
+            if (exists) {
+              return prev.map(a => a.id === data.agentId ? { ...a, ...data, lastSeen: new Date().toISOString() } : a)
+            }
+            return [...prev, {
+              id: data.agentId,
+              name: data.name || data.agentId,
+              role: data.role || 'agent',
+              status: data.status || 'idle',
+              capabilities: data.capabilities || [],
+              lastSeen: new Date().toISOString(),
+            }]
+          })
+          setLastUpdated(new Date().toLocaleTimeString())
+          break
+        }
+        case 'task':
+        case 'task_created': {
+          setTasks(prev => [data.task ? {
+            id: data.task.id,
+            type: data.task.type || 'general',
+            description: data.task.description || data.task.title || '',
+            priority: data.task.priority || 'medium',
+            status: data.task.status || 'pending',
+            assignedTo: data.task.assigneeName || null,
+            createdAt: data.task.createdAt || new Date().toISOString(),
+            updatedAt: data.task.updatedAt || new Date().toISOString(),
+          } : data.task_data || data, ...prev].slice(0, 50))
+          setLastUpdated(new Date().toLocaleTimeString())
+          break
+        }
+        case 'task_updated': {
+          setTasks(prev => prev.map(t => t.id === data.task?.id ? { ...t, ...data.task } : t))
+          setLastUpdated(new Date().toLocaleTimeString())
+          break
+        }
+        case 'message': {
+          // Could show a notification toast here
+          setLastUpdated(new Date().toLocaleTimeString())
+          break
+        }
+        case 'heartbeat': {
+          setLastUpdated(new Date().toLocaleTimeString())
+          break
+        }
+        default:
+          break
+      }
+    }
+
+    connect()
+
+    // Heartbeat check every 30s
+    heartbeatTimer = setInterval(() => {
+      if (eventSourceRef.current?.readyState === EventSource.OPEN) {
+        setLastUpdated(new Date().toLocaleTimeString())
+      }
+    }, 30000)
+
+    return () => {
+      clearTimeout(reconnectTimeout)
+      clearInterval(heartbeatTimer)
+      eventSourceRef.current?.close()
+      eventSourceRef.current = null
+    }
+  }, [API])
+
+  // Initial fetch + polling fallback (every 30s)
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 15000)
+    const interval = setInterval(fetchData, 30000)
     return () => clearInterval(interval)
   }, [fetchData])
 
@@ -271,7 +375,9 @@ export default function ProspyrDashboard() {
           <div className="text-right">
             {lastUpdated && <p className="text-xs text-slate-500">Updated: {lastUpdated}</p>}
             <div className="flex gap-2 mt-1">
-              <span className="px-2 py-0.5 bg-emerald-900/50 text-emerald-400 rounded text-xs">Active</span>
+              <span className={`px-2 py-0.5 rounded text-xs ${sseConnected ? 'bg-emerald-900/50 text-emerald-400' : 'bg-red-900/50 text-red-400'}`}>
+                {sseConnected ? '● Live' : '○ Polling'}
+              </span>
               <span className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-xs">v2.0</span>
             </div>
           </div>
@@ -281,7 +387,7 @@ export default function ProspyrDashboard() {
       <main className="max-w-7xl mx-auto px-6 py-8">
         {error && (
           <div className="mb-6 p-4 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm">
-            <strong>Connection Error:</strong> {error} — Using demo mode
+            <strong>Connection Error:</strong> {error}
           </div>
         )}
 
@@ -313,15 +419,13 @@ export default function ProspyrDashboard() {
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             {/* Stats */}
-            {stats && (
-              <div className="grid grid-cols-5 gap-4">
-                <StatCard label="Total Tasks" value={stats.stats.totalTasks} color="text-white" />
-                <StatCard label="Pending" value={stats.stats.pending} color="text-yellow-400" />
-                <StatCard label="Running" value={stats.stats.running} color="text-blue-400" />
-                <StatCard label="Completed" value={stats.stats.completed} color="text-emerald-400" />
-                <StatCard label="Failed" value={stats.stats.failed} color="text-red-400" />
-              </div>
-            )}
+            <div className="grid grid-cols-5 gap-4">
+              <StatCard label="Total Tasks" value={stats.totalTasks} color="text-white" />
+              <StatCard label="Pending" value={stats.pending} color="text-yellow-400" />
+              <StatCard label="Running" value={stats.running} color="text-blue-400" />
+              <StatCard label="Completed" value={stats.completed} color="text-emerald-400" />
+              <StatCard label="Failed" value={stats.failed} color="text-red-400" />
+            </div>
 
             {/* Agent Overview */}
             <div>
