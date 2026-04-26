@@ -76,17 +76,14 @@ The agents code (`agents/`) is NOT part of the Next.js build — it's likely dep
 ---
 
 ## Quick Wins
-
-- [ ] Delete `lib/database.ts` (154 lines, zero consumers)
-- [ ] Delete `lib/paperclip.ts` (68 lines, zero consumers)  
-- [ ] Delete `lib/storage.ts` (zero consumers)
-- [ ] Delete `agent-poller.js` + `agent-sse.js` (zero consumers, or wire up)
-- [ ] Unexport `tasks` and `messages` Maps from `lib/store.ts` (internal state, not public API)
-- [ ] Unexport 6 unused functions from `lib/store.ts`: `broadcastToAgent`, `registerSSEClient`, `removeSSEClient`, `addTask`, `updateTask`, `getAllTasks`
-- [ ] Unexport unused types `SSEEvent`, `Attachment`, `ToolCall`, `DashboardConfig`
+- [x] Delete dead files (agent-poller.js, agent-sse.js, lib/database.ts, lib/paperclip.ts, lib/storage.ts)
+- [x] Uninstall unused deps (swr, @supabase/supabase-js, eventsource, autoprefixer)
+- [x] Strip lib/store.ts to only used exports
+- [x] Remove unused SSEEvent type
 - [ ] Fix empty `catch {}` in `app/api/prospyr/msg/route.ts`
-- [ ] Verify `addResponse` exists in `lib/store.ts` before chat route goes live
-- [ ] Run `npm uninstall swr @supabase/supabase-js eventsource` to clean up unused deps
+- [ ] Add auth guard to `/api/prospyr/*` routes
+- [ ] Add basic test coverage for SSE/task/agent core flows
+- [ ] Run `npm audit fix` (or evaluate next upgrade path)
 
 ---
 

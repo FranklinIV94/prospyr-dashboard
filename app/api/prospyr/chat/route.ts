@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, message }, { status: 201 })
   } catch (e) {
+    console.error('chat route error:', e)
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 }

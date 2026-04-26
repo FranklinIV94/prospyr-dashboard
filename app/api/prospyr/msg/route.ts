@@ -158,7 +158,8 @@ export async function POST(request: NextRequest) {
       delivered: true
     }, { status: 201 })
 
-  } catch {
+  } catch (error) {
+    console.error('msg route error:', error)
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
   }
 }
