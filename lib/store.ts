@@ -6,14 +6,11 @@ import { Agent, Task, ChatMessage } from './types'
 // SSE connections per agent
 export const sseClients = new Map<string, Set<{ agentId: string; controller: ReadableStreamDefaultController }>>()
 
-// Task storage
-export const tasks = new Map<string, Task>()
+// Agent registry
+export const connectedAgents = new Map<string, Agent>()
 
 // Message storage (agentId -> messages)
 export const messages = new Map<string, ChatMessage[]>()
-
-// Agent registry (static for now, could be dynamic)
-export const connectedAgents = new Map<string, Agent>()
 
 // Broadcast an event to a specific agent's SSE connections
 export function broadcastToAgent(agentId: string, event: object) {
@@ -36,45 +33,6 @@ export function broadcastToAll(event: object) {
   })
 }
 
-// Register a new SSE client for an agent
-export function registerSSEClient(agentId: string, controller: ReadableStreamDefaultController) {
-  if (!sseClients.has(agentId)) {
-    sseClients.set(agentId, new Set())
-  }
-  sseClients.get(agentId)!.add({ agentId, controller })
-}
-
-// Remove SSE client
-export function removeSSEClient(agentId: string, controller: ReadableStreamDefaultController) {
-  const clients = sseClients.get(agentId)
-  if (clients) {
-    const clientArr = Array.from(clients)
-    for (let i = 0; i < clientArr.length; i++) {
-      if (clientArr[i].controller === controller) {
-        clients.delete(clientArr[i])
-        break
-      }
-    }
-  }
-}
-
-// Add a task
-export function addTask(task: Task) {
-  tasks.set(task.id, task)
-  broadcastToAll({ type: 'task', action: 'created', task })
-  return task
-}
-
-// Update a task
-export function updateTask(taskId: string, updates: Partial<Task>) {
-  const task = tasks.get(taskId)
-  if (!task) return null
-  const updated = { ...task, ...updates, updatedAt: new Date().toISOString() }
-  tasks.set(taskId, updated)
-  broadcastToAll({ type: 'task', action: 'updated', task: updated })
-  return updated
-}
-
 // Add a message
 export function addMessage(message: ChatMessage) {
   const key = message.toAgentId
@@ -87,11 +45,6 @@ export function addMessage(message: ChatMessage) {
 // Get messages for an agent
 export function getMessages(agentId: string) {
   return messages.get(agentId) || []
-}
-
-// Get all tasks
-export function getAllTasks() {
-  return Array.from(tasks.values())
 }
 
 // Register/update an agent

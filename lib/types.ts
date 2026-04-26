@@ -1,4 +1,4 @@
-// Prospyr Command Center — Shared Types
+// Prospyr Command Center — Shared Types (used by API routes)
 
 export interface Agent {
   id: string
@@ -32,12 +32,5 @@ export interface ChatMessage {
   fromName: string
   toAgentId: string
   content: string
-  timestamp: string
-}
-
-export interface SSEEvent {
-  type: 'connected' | 'task' | 'message' | 'heartbeat' | 'error'
-  agentId?: string
-  data: Record<string, any>
   timestamp: string
 }
