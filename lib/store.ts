@@ -12,6 +12,45 @@ export const connectedAgents = new Map<string, Agent>()
 // Message storage (agentId -> messages)
 export const messages = new Map<string, ChatMessage[]>()
 
+// Pre-populate known agents (这些会在 Railway 重启后消失 — MVP)
+const INITIAL_AGENTS: Agent[] = [
+  {
+    id: 'supervisor-001',
+    name: 'CEO Agent',
+    role: 'ceo',
+    status: 'idle',
+    capabilities: ['strategy', 'delegation', 'planning', 'memory'],
+    lastHeartbeat: new Date().toISOString(),
+    currentTaskId: null,
+    connected: false,
+  },
+  {
+    id: 'coo-southstar-001',
+    name: 'Southstar',
+    role: 'coo',
+    status: 'idle',
+    capabilities: ['operations', 'research', 'code', 'system_admin'],
+    lastHeartbeat: new Date().toISOString(),
+    currentTaskId: null,
+    connected: false,
+  },
+  {
+    id: 'sales-001',
+    name: 'Sales Agent',
+    role: 'sales',
+    status: 'offline',
+    capabilities: ['lead_followup', 'outreach', 'crm'],
+    lastHeartbeat: new Date().toISOString(),
+    currentTaskId: null,
+    connected: false,
+  },
+]
+
+// Initialize with known agents
+for (const agent of INITIAL_AGENTS) {
+  connectedAgents.set(agent.id, agent)
+}
+
 // Broadcast an event to a specific agent's SSE connections
 export function broadcastToAgent(agentId: string, event: object) {
   const clients = sseClients.get(agentId)
@@ -50,6 +89,6 @@ export function getMessages(agentId: string) {
 // Register/update an agent
 export function registerAgent(agent: Agent) {
   connectedAgents.set(agent.id, agent)
-  broadcastToAll({ type: 'agent', action: 'registered', agent })
+  broadcastToAll({ type: 'agent_registered', agent })
   return agent
 }
