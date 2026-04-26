@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { agentId, content, role, messageId } = body
+    const { agentId, content, role, messageId: msgId } = body
 
     if (!agentId || !content) {
       return NextResponse.json({ error: 'agentId and content required' }, { status: 400 })
@@ -44,9 +44,9 @@ export async function POST(request: NextRequest) {
 
     // Agent responding to a message
     if (role === 'assistant') {
-      const responseId = messageId || crypto.randomUUID()
+      const responseId = msgId || crypto.randomUUID()
       addResponse(responseId, content)
-      return NextResponse.json({ success: true, responseId }), { status: 201 }
+      return NextResponse.json({ success: true, responseId }, { status: 201 })
     }
 
     // User sending a message

@@ -20,20 +20,20 @@ export function broadcastToAgent(agentId: string, event: object) {
   const clients = sseClients.get(agentId)
   if (!clients) return
   const data = `data: ${JSON.stringify(event)}\n\n`
-  for (const client of clients) {
+  clients.forEach(client => {
     try {
       client.controller.enqueue(new TextEncoder().encode(data))
     } catch {
       clients.delete(client)
     }
-  }
+  })
 }
 
 // Broadcast to all connected agents
 export function broadcastToAll(event: object) {
-  for (const [agentId] of sseClients) {
+  sseClients.forEach((_, agentId) => {
     broadcastToAgent(agentId, event)
-  }
+  })
 }
 
 // Register a new SSE client for an agent
@@ -48,9 +48,10 @@ export function registerSSEClient(agentId: string, controller: ReadableStreamDef
 export function removeSSEClient(agentId: string, controller: ReadableStreamDefaultController) {
   const clients = sseClients.get(agentId)
   if (clients) {
-    for (const client of clients) {
-      if (client.controller === controller) {
-        clients.delete(client)
+    const clientArr = Array.from(clients)
+    for (let i = 0; i < clientArr.length; i++) {
+      if (clientArr[i].controller === controller) {
+        clients.delete(clientArr[i])
         break
       }
     }

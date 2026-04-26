@@ -18,15 +18,12 @@ interface AgentInfo {
   events: number
 }
 
-const connectedAgents = new Map()
-const eventBuffers = new Map()
+const connectedAgents = new Map<string, AgentInfo>()
+const eventBuffers = new Map<string, any[]>()
+const sseClients = new Map<string, Set<ReadableStreamDefaultController>>()
 const MAX_BUFFER = 50
 
-export function createSSEConnection(
-  agentId: string,
-  controller: ReadableStreamDefaultController,
-  info?: Partial<AgentInfo>
-) {
+function createSSEConnection(agentId: string, controller: ReadableStreamDefaultController, info?: Partial<AgentInfo>) {
   const agentInfo: AgentInfo = {
     agentId,
     name: info?.name || agentId,
@@ -40,71 +37,66 @@ export function createSSEConnection(
     lastActivity: new Date().toISOString(),
     events: 0
   }
-
   connectedAgents.set(agentId, agentInfo)
   eventBuffers.set(agentId, [])
-
-  sendEvent(agentId, {
-    type: 'connected',
-    agentId,
-    name: agentInfo.name,
-    capabilities: agentInfo.capabilities,
-    status: agentInfo.status,
-    timestamp: new Date().toISOString()
-  })
-
+  if (!sseClients.has(agentId)) sseClients.set(agentId, new Set())
+  sseClients.get(agentId)!.add(controller)
+  sendEvent(agentId, { type: 'connected', agentId, name: agentInfo.name, status: agentInfo.status })
   return agentInfo
 }
 
-export function updateAgentInfo(agentId: string, updates: Partial<AgentInfo>) {
+function updateAgentInfo(agentId: string, updates: Partial<AgentInfo>) {
   const agent = connectedAgents.get(agentId)
   if (agent) {
     Object.assign(agent, updates, { lastActivity: new Date().toISOString() })
   }
+  return agent
 }
 
-export function closeSSEConnection(agentId: string) {
+function closeSSEConnection(agentId: string) {
   connectedAgents.delete(agentId)
   eventBuffers.delete(agentId)
+  sseClients.delete(agentId)
 }
 
-export function sendEvent(agentId: string, event: Record<string, unknown>) {
-  const agent = connectedAgents.get(agentId)
-  if (!agent) return false
-
-  try {
-    const encoder = new TextEncoder()
-    agent.controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
-    agent.lastActivity = new Date().toISOString()
-    agent.events++
-
-    const buffer = eventBuffers.get(agentId) || []
+function sendEvent(agentId: string, event: Record<string, unknown>) {
+  const clients = sseClients.get(agentId)
+  if (!clients || clients.size === 0) return false
+  const data = `data: ${JSON.stringify(event)}\n\n`
+  let sent = false
+  clients.forEach(controller => {
+    try {
+      controller.enqueue(new TextEncoder().encode(data))
+      sent = true
+    } catch {
+      clients.delete(controller)
+    }
+  })
+  const buffer = eventBuffers.get(agentId)
+  if (buffer) {
     buffer.push(event)
     if (buffer.length > MAX_BUFFER) buffer.shift()
-    eventBuffers.set(agentId, buffer)
-
-    return true
-  } catch {
-    closeSSEConnection(agentId)
-    return false
   }
+  const agent = connectedAgents.get(agentId)
+  if (agent) agent.events++
+  return sent
 }
 
-export function broadcastEvent(event: Record<string, unknown>) {
+function broadcastEvent(event: Record<string, unknown>) {
   for (const agentId of connectedAgents.keys()) {
     sendEvent(agentId, event)
   }
 }
 
-export function sendTaskToAgent(agentId: string, task: Record<string, unknown>) {
+function sendTaskToAgent(agentId: string, task: Record<string, unknown>) {
   return sendEvent(agentId, { type: 'new_task', task, timestamp: new Date().toISOString() })
 }
 
-export function sendMessageToAgent(agentId: string, message: Record<string, unknown>) {
+function sendMessageToAgent(agentId: string, message: Record<string, unknown>) {
   return sendEvent(agentId, { type: 'new_message', message, timestamp: new Date().toISOString() })
 }
 
-export function getConnectionStatus() {
+function getConnectionStatus() {
   return {
     connectedAgents: Array.from(connectedAgents.keys()),
     total: connectedAgents.size
@@ -115,32 +107,30 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const agentId = url.searchParams.get('agentId')
 
-  if (!agentId) {
-    return Response.json({ error: 'agentId required' }, { status: 400 })
-  }
-
-  const encoder = new TextEncoder()
-
   const stream = new ReadableStream({
     start(controller) {
-      createSSEConnection(agentId, controller)
+      if (!agentId) {
+        controller.close()
+        return
+      }
+      createSSEConnection(agentId, controller, {
+        name: url.searchParams.get('name') || agentId,
+        role: url.searchParams.get('role') || 'agent',
+        capabilities: url.searchParams.get('capabilities')?.split(',') || []
+      })
 
-      const heartbeatInterval = setInterval(() => {
+      const keepAlive = setInterval(() => {
         try {
-          controller.enqueue(encoder.encode(`: heartbeat\n\n`))
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'heartbeat', timestamp: new Date().toISOString() })}\n\n`))
         } catch {
-          clearInterval(heartbeatInterval)
-          closeSSEConnection(agentId)
+          clearInterval(keepAlive)
         }
       }, 30000)
 
       request.signal.addEventListener('abort', () => {
-        clearInterval(heartbeatInterval)
+        clearInterval(keepAlive)
         closeSSEConnection(agentId)
       })
-    },
-    cancel() {
-      closeSSEConnection(agentId)
     }
   })
 
@@ -148,8 +138,7 @@ export async function GET(request: NextRequest) {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no'
+      'Connection': 'keep-alive'
     }
   })
 }
@@ -157,32 +146,36 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { agentId, name, role, capabilities, status, workspaceId } = body
+    const { action, agentId, name, role, capabilities } = body
 
-    if (!agentId) {
-      return Response.json({ error: 'agentId required' }, { status: 400 })
+    if (action === 'register' && agentId) {
+      const agent = connectedAgents.get(agentId)
+      if (agent) {
+        return Response.json({ success: true, agent: { ...agent, controller: undefined } })
+      }
+      return Response.json({ error: 'Agent not connected' }, { status: 404 })
     }
 
-    const agent = connectedAgents.get(agentId)
-    if (agent) {
-      agent.name = name || agent.name
-      agent.role = role || agent.role
-      agent.capabilities = capabilities || agent.capabilities
-      agent.status = status || agent.status
-      agent.workspaceId = workspaceId || agent.workspaceId
-      agent.lastActivity = new Date().toISOString()
-
-      return Response.json({
-        success: true,
-        agent: { agentId: agent.agentId, name: agent.name, capabilities: agent.capabilities, status: agent.status }
-      })
+    if (action === 'status') {
+      return Response.json(getConnectionStatus())
     }
 
-    return Response.json({
-      success: true,
-      message: 'Agent info received. Connect via SSE to activate.',
-      agent: { agentId, name, capabilities: capabilities || ['general'] }
-    })
+    if (action === 'broadcast' && body.event) {
+      broadcastEvent(body.event)
+      return Response.json({ success: true })
+    }
+
+    if (action === 'sendTask' && agentId && body.task) {
+      const sent = sendTaskToAgent(agentId, body.task)
+      return Response.json({ success: sent })
+    }
+
+    if (action === 'sendMessage' && agentId && body.message) {
+      const sent = sendMessageToAgent(agentId, body.message)
+      return Response.json({ success: sent })
+    }
+
+    return Response.json({ error: 'Invalid action' }, { status: 400 })
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 })
   }

@@ -1,9 +1,8 @@
 // API route: /api/prospyr/messages
 // Send messages to agents (real-time via SSE)
-// Supports GET (poll) and POST (send)
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sendMessageToAgent } from '../events/route'
+import { addMessage } from '@/lib/store'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +29,18 @@ function generateId() {
   return crypto.randomUUID()
 }
 
+function storeMessage(message: Message, agentId: string) {
+  addMessage({
+    id: message.id,
+    from: message.role === 'user' ? 'user' : 'agent',
+    fromId: 'user',
+    fromName: 'User',
+    content: message.content,
+    timestamp: message.timestamp,
+    toAgentId: agentId
+  })
+}
+
 // GET - Get messages or poll for new messages
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
@@ -40,7 +51,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'agentId required' }, { status: 400 })
   }
 
-  // Poll for new messages
   if (action === 'poll') {
     const session = chatSessions.get(agentId)
     if (!session) {
@@ -50,7 +60,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ messages: unread })
   }
 
-  // Get full chat history
   const session = chatSessions.get(agentId)
   if (!session) {
     return NextResponse.json({ messages: [], session: null })
@@ -65,7 +74,7 @@ export async function GET(request: NextRequest) {
   })
 }
 
-// POST - Send a message to an agent (or poll via query params)
+// POST - Send a message to an agent
 export async function POST(request: NextRequest) {
   try {
     const url = new URL(request.url)
@@ -73,7 +82,6 @@ export async function POST(request: NextRequest) {
     const content = url.searchParams.get('content')
     const action = url.searchParams.get('action')
 
-    // If using query params (workaround for POST blocking)
     if (action === 'send' || (agentId && content)) {
       const targetAgentId = agentId || url.searchParams.get('to')
       const msgContent = content || url.searchParams.get('message')
@@ -104,8 +112,7 @@ export async function POST(request: NextRequest) {
 
       session.messages.push(message)
       session.lastActivity = new Date().toISOString()
-
-      sendMessageToAgent(targetAgentId, message)
+      storeMessage(message, targetAgentId)
 
       return NextResponse.json({
         message,
@@ -114,7 +121,6 @@ export async function POST(request: NextRequest) {
       }, { status: 201 })
     }
 
-    // Try JSON body
     const body = await request.json().catch(() => ({}))
     const { agentId: bodyAgentId, content: bodyContent } = body
 
@@ -144,8 +150,7 @@ export async function POST(request: NextRequest) {
 
     session.messages.push(message)
     session.lastActivity = new Date().toISOString()
-
-    sendMessageToAgent(bodyAgentId, message)
+    storeMessage(message, bodyAgentId)
 
     return NextResponse.json({
       message,
@@ -153,7 +158,7 @@ export async function POST(request: NextRequest) {
       delivered: true
     }, { status: 201 })
 
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
   }
 }

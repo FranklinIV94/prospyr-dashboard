@@ -30,10 +30,6 @@ export const SOUTHSTAR_TOOLS: Tool[] = [
 
       try {
         const result = await new Promise<string>((resolve, reject) => {
-          const proc = Deno.run
-            ? (() => {})() // Skip for now, command execution would go here
-            : null
-
           // Simple exec for Node.js
           const { execSync } = require('child_process')
           const output = execSync(cmd, {

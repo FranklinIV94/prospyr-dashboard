@@ -4,6 +4,7 @@
 import type {
   Agent,
   AgentContext,
+  AgentRole,
   AgentStatus,
   AgentThought,
   LLMConfig,
@@ -312,7 +313,7 @@ export abstract class BaseAgent {
     return {
       id: this.id,
       name: this.name,
-      role: this.role,
+      role: this.role as AgentRole,
       status: this.status,
       capabilities: this.capabilities,
       adapterType: this.adapterType,

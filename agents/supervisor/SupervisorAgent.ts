@@ -1,8 +1,8 @@
 // Supervisor Agent - coordinates all specialist agents
 // Inspired by PentAGI's Orchestrator pattern
 
-import { BaseAgent } from './BaseAgent'
-import type { Agent, LLMConfig, Task, Tool, MemoryEntry } from '../types'
+import { BaseAgent } from '../BaseAgent'
+import type { Agent, LLMConfig, Task, Tool, MemoryEntry } from '../../types'
 
 // Tool definitions for supervisor
 export const SUPERVISOR_TOOLS: Tool[] = [

@@ -1,300 +1,416 @@
 'use client'
-import useSWR from 'swr'
-import { useState, useEffect, useRef } from 'react'
-
-const API = process.env.NEXT_PUBLIC_PAPERCLIP_API || 'http://localhost:3100'
-const K = process.env.NEXT_PUBLIC_PAPERCLIP_KEY || ''
-const COMPANY = process.env.NEXT_PUBLIC_PAPERCLIP_COMPANY || 'b18b9b76-bb39-42b8-8349-c323bffd5e3b'
-
-const fetcher = (url: string) => fetch(url, { headers: { Authorization: `Bearer ${K}` } }).then(r => r.json())
+import { useState, useEffect, useCallback } from 'react'
 
 interface Agent {
-  id: string; name: string; role: string; status: string
-  capabilities: string[]; lastHeartbeat: string; currentTaskId: string | null; connected: boolean
+  id: string
+  name: string
+  role: string
+  status: string
+  capabilities?: string[]
+  lastSeen?: string
 }
+
 interface Task {
-  id: string; title: string; description: string; assigneeId: string | null
-  assigneeName: string | null; status: string; priority: string
-  createdBy: string; createdAt: string; updatedAt: string
+  id: string
+  type: string
+  description: string
+  priority: string
+  status: string
+  assignedTo?: string
+  createdAt: string
+  updatedAt: string
 }
-interface ChatMessage {
-  id: string; from: string; fromId: string; fromName: string
-  toAgentId: string; content: string; timestamp: string
+
+interface PlatformStats {
+  stats: {
+    totalTasks: number
+    pending: number
+    running: number
+    completed: number
+    failed: number
+  }
+  agents: Array<{
+    id: string
+    name: string
+    role: string
+    status: string
+    activeTasks: number
+  }>
 }
 
-export default function Dashboard() {
-  const { data: paperclipAgents } = useSWR(`${API}/api/companies/${COMPANY}/agents`, fetcher)
-  const [activeTab, setActiveTab] = useState<'agents' | 'tasks' | 'chat'>('agents')
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({})
-  const [selectedAgent, setSelectedAgent] = useState<string>('')
-  const [eventSource, setEventSource] = useState<EventSource | null>(null)
+type Tab = 'dashboard' | 'agents' | 'tasks' | 'submit'
 
-  const [taskTitle, setTaskTitle] = useState('')
-  const [taskDesc, setTaskDesc] = useState('')
-  const [taskAssignee, setTaskAssignee] = useState('')
-  const [taskPriority, setTaskPriority] = useState('medium')
-
-  const [chatMessage, setChatMessage] = useState('')
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
-  const chatEndRef = useRef<HTMLDivElement>(null)
-
-  const loadTasks = async () => {
-    try {
-      const res = await fetch('/api/prospyr/tasks')
-      const data = await res.json()
-      setTasks(data.tasks || [])
-    } catch {}
+function PriorityBadge({ priority }: { priority: string }) {
+  const colors: Record<string, string> = {
+    critical: 'bg-red-600',
+    high: 'bg-orange-600',
+    medium: 'bg-yellow-600',
+    low: 'bg-slate-600',
   }
+  return (
+    <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${colors[priority] || 'bg-slate-600'}`}>
+      {priority}
+    </span>
+  )
+}
 
-  const loadMessages = async (agentId: string) => {
-    try {
-      const res = await fetch(`/api/prospyr/chat?agentId=${agentId}`)
-      const data = await res.json()
-      setMessages(prev => ({ ...prev, [agentId]: data.messages || [] }))
-    } catch {}
+function StatusBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    idle: 'bg-emerald-600',
+    thinking: 'bg-purple-600',
+    running: 'bg-blue-600',
+    waiting: 'bg-yellow-600',
+    error: 'bg-red-600',
+    offline: 'bg-slate-700',
+    completed: 'bg-emerald-600',
+    pending: 'bg-slate-600',
+    failed: 'bg-red-600',
   }
+  return (
+    <span className={`px-3 py-1 rounded-full text-xs font-medium text-white ${colors[status] || 'bg-slate-600'}`}>
+      {status}
+    </span>
+  )
+}
 
-  useEffect(() => {
-    const es = new EventSource('/api/prospyr/events?agentId=dashboard')
-    es.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data)
-        if (event.type === 'task' || event.type === 'message') loadTasks()
-      } catch {}
-    }
-    setEventSource(es)
-    loadTasks()
-    return () => es.close()
-  }, [])
+function AgentCard({ agent }: { agent: Agent }) {
+  return (
+    <div className="bg-slate-800/70 border border-slate-700 rounded-xl p-5 hover:border-slate-600 transition-all">
+      <div className="flex justify-between items-start mb-3">
+        <div>
+          <h3 className="font-semibold text-lg text-white">{agent.name}</h3>
+          <p className="text-slate-400 text-sm mt-0.5 capitalize">{agent.role}</p>
+        </div>
+        <StatusBadge status={agent.status} />
+      </div>
+      {agent.capabilities && agent.capabilities.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-3">
+          {agent.capabilities.slice(0, 4).map(cap => (
+            <span key={cap} className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-400">
+              {cap}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-4 text-xs text-slate-500 mt-3 pt-3 border-t border-slate-700">
+        <span>ID: {agent.id.slice(0, 8)}...</span>
+        {agent.lastSeen && <span>Last seen: {new Date(agent.lastSeen).toLocaleTimeString()}</span>}
+      </div>
+    </div>
+  )
+}
 
-  useEffect(() => {
-    if (selectedAgent) loadMessages(selectedAgent)
-  }, [selectedAgent])
+function TaskCard({ task }: { task: Task }) {
+  return (
+    <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition-colors">
+      <div className="flex justify-between items-start mb-2">
+        <span className="text-xs text-slate-500 font-mono">{task.type}</span>
+        <div className="flex gap-2">
+          <PriorityBadge priority={task.priority} />
+          <StatusBadge status={task.status} />
+        </div>
+      </div>
+      <p className="text-slate-200 text-sm mb-2 line-clamp-2">{task.description}</p>
+      <div className="flex justify-between text-xs text-slate-500">
+        <span>{new Date(task.createdAt).toLocaleString()}</span>
+        {task.assignedTo && <span>Assigned: {task.assignedTo}</span>}
+      </div>
+    </div>
+  )
+}
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chatHistory])
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 text-center">
+      <div className={`text-3xl font-bold ${color}`}>{value}</div>
+      <div className="text-xs text-slate-500 mt-1 uppercase tracking-wide">{label}</div>
+    </div>
+  )
+}
 
-  const handleCreateTask = async () => {
-    if (!taskTitle.trim()) return
-    const agentName = paperclipAgents?.find((a: Agent) => a.id === taskAssignee)?.name || null
-    await fetch('/api/prospyr/tasks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: taskTitle, description: taskDesc, assigneeId: taskAssignee || null, assigneeName: agentName, priority: taskPriority, createdBy: 'Franklin' })
-    })
-    setTaskTitle(''); setTaskDesc(''); setTaskAssignee(''); setTaskPriority('medium')
-    loadTasks()
-  }
+function SubmitTask({ onSubmit }: { onSubmit: (task: string, type: string, priority: string) => void }) {
+  const [description, setDescription] = useState('')
+  const [type, setType] = useState('general')
+  const [priority, setPriority] = useState('medium')
 
-  const handleSendChat = async () => {
-    if (!chatMessage.trim() || !selectedAgent) return
-    await fetch('/api/prospyr/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toAgentId: selectedAgent, content: chatMessage, from: 'user', fromId: 'franklin', fromName: 'Franklin' })
-    })
-    setChatMessage('')
-    loadMessages(selectedAgent)
-  }
-
-  const handleUpdateTask = async (taskId: string, status: string) => {
-    await fetch('/api/prospyr/tasks', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId, status })
-    })
-    loadTasks()
-  }
-
-  const handleSelectAgent = (agentId: string) => {
-    setSelectedAgent(agentId)
-    setActiveTab('chat')
-    loadMessages(agentId)
-    setChatHistory(messages[agentId] || [])
-  }
-
-  useEffect(() => {
-    if (selectedAgent && messages[selectedAgent]) setChatHistory(messages[selectedAgent])
-  }, [messages, selectedAgent])
-
-  const statusColor = (s: string) => {
-    if (s === 'done') return 'bg-green-600'
-    if (s === 'in_progress') return 'bg-blue-600'
-    if (s === 'blocked') return 'bg-red-600'
-    return 'bg-slate-600'
-  }
-  const priorityColor = (p: string) => {
-    if (p === 'critical') return 'text-red-400'
-    if (p === 'high') return 'text-orange-400'
-    if (p === 'low') return 'text-slate-400'
-    return 'text-slate-300'
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!description.trim()) return
+    onSubmit(description, type, priority)
+    setDescription('')
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <h1 className="text-3xl font-bold mb-2">Prospyr Control</h1>
-      <p className="text-slate-400 mb-8">All Lines Operations Hub</p>
-
-      <div className="flex gap-4 mb-6 border-b border-slate-700 pb-4">
-        {['agents', 'tasks', 'chat'].map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab as typeof activeTab)}
-            className={`px-4 py-2 rounded capitalize ${activeTab === tab ? 'bg-blue-600' : 'bg-slate-800'}`}>{tab}</button>
-        ))}
-        <span className="ml-auto text-slate-400 text-sm pt-2">
-          {paperclipAgents?.length || 0} agents · {tasks.length} tasks
-        </span>
+    <form onSubmit={handleSubmit} className="bg-slate-800/70 border border-slate-700 rounded-xl p-6">
+      <h2 className="text-lg font-semibold mb-4">Submit New Task</h2>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm text-slate-400 mb-1">Task Description</label>
+          <textarea
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="What needs to be done?"
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white text-sm resize-none h-24"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Type</label>
+            <select
+              value={type}
+              onChange={e => setType(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white text-sm"
+            >
+              <option value="general">General</option>
+              <option value="research">Research</option>
+              <option value="code">Code</option>
+              <option value="operations">Operations</option>
+              <option value="communication">Communication</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Priority</label>
+            <select
+              value={priority}
+              onChange={e => setPriority(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white text-sm"
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+        </div>
+        <button
+          type="submit"
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors"
+        >
+          Submit Task
+        </button>
       </div>
+    </form>
+  )
+}
 
-      {activeTab === 'agents' && (
-        <div className="space-y-4">
-          {(paperclipAgents || []).map((a: Agent) => (
-            <div key={a.id} className="bg-slate-800 rounded p-4 flex justify-between items-center">
-              <div>
-                <h3 className="font-semibold text-lg">{a.name}</h3>
-                <p className="text-slate-400 text-sm">{a.role || 'agent'} · {a.adapterType || 'unknown'}</p>
-                <p className="text-slate-500 text-xs mt-1">
-                  {a.lastHeartbeat ? `Last heartbeat: ${new Date(a.lastHeartbeat).toLocaleTimeString()}` : 'Never'}
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={`px-3 py-1 rounded text-sm ${a.status === 'idle' || a.status === 'running' ? 'bg-green-600' : 'bg-slate-600'}`}>
-                  {a.connected ? '🟢 connected' : '⚪ disconnected'}
-                </span>
-                {a.capabilities?.length > 0 && (
-                  <div className="flex gap-1 flex-wrap max-w-[200px]">
-                    {a.capabilities.slice(0, 4).map(c => (
-                      <span key={c} className="text-xs bg-slate-700 px-2 py-0.5 rounded">{c}</span>
-                    ))}
-                  </div>
-                )}
-                <button onClick={() => handleSelectAgent(a.id)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-sm">Message</button>
-              </div>
+export default function ProspyrDashboard() {
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard')
+  const [stats, setStats] = useState<PlatformStats | null>(null)
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+
+  const API = process.env.NEXT_PUBLIC_PROSPYR_API || '/api/prospyr'
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [statsRes, tasksRes] = await Promise.all([
+        fetch(`${API}/status`).catch(() => null),
+        fetch(`${API}/tasks`).catch(() => null),
+      ])
+
+      if (statsRes?.ok) {
+        const statsData = await statsRes.json()
+        setStats(statsData)
+        setAgents(statsData.agents || [])
+      }
+
+      if (tasksRes?.ok) {
+        const tasksData = await tasksRes.json()
+        setTasks(tasksData.tasks || [])
+      }
+
+      setError(null)
+      setLastUpdated(new Date().toLocaleTimeString())
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [API])
+
+  useEffect(() => {
+    fetchData()
+    const interval = setInterval(fetchData, 15000)
+    return () => clearInterval(interval)
+  }, [fetchData])
+
+  const handleSubmitTask = async (description: string, type: string, priority: string) => {
+    try {
+      const res = await fetch(`${API}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description, type, priority }),
+      })
+      if (res.ok) {
+        fetchData()
+      }
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'agents', label: 'Agents' },
+    { id: 'tasks', label: 'Tasks' },
+    { id: 'submit', label: 'Submit Task' },
+  ]
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-white">
+      {/* Header */}
+      <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Prospyr Control</h1>
+            <p className="text-slate-500 text-sm">Multi-Agent Operations Platform</p>
+          </div>
+          <div className="text-right">
+            {lastUpdated && <p className="text-xs text-slate-500">Updated: {lastUpdated}</p>}
+            <div className="flex gap-2 mt-1">
+              <span className="px-2 py-0.5 bg-emerald-900/50 text-emerald-400 rounded text-xs">Active</span>
+              <span className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-xs">v2.0</span>
             </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {error && (
+          <div className="mb-6 p-4 bg-red-900/30 border border-red-800 rounded-xl text-red-300 text-sm">
+            <strong>Connection Error:</strong> {error} — Using demo mode
+          </div>
+        )}
+
+        {/* Tab Navigation */}
+        <div className="flex gap-2 mb-6 border-b border-slate-800 pb-4">
+          {tabs.map(({ id, label }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === id
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {label}
+            </button>
           ))}
-          {(!paperclipAgents || paperclipAgents.length === 0) && <p className="text-slate-400">Loading agents from Paperclip...</p>}
+          <div className="flex-1" />
+          <button
+            onClick={fetchData}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm transition-colors"
+          >
+            Refresh
+          </button>
         </div>
-      )}
 
-      {activeTab === 'tasks' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-slate-800 rounded p-4">
-            <h2 className="text-lg font-semibold mb-4">Create Task</h2>
-            <div className="space-y-3">
-              <input value={taskTitle} onChange={e => setTaskTitle(e.target.value)} placeholder="Task title"
-                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
-              <textarea value={taskDesc} onChange={e => setTaskDesc(e.target.value)} placeholder="Description (optional)" rows={3}
-                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
-              <select value={taskAssignee} onChange={e => setTaskAssignee(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white">
-                <option value="">Unassigned</option>
-                {(paperclipAgents || []).map((a: Agent) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-              <select value={taskPriority} onChange={e => setTaskPriority(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white">
-                <option value="low">Low Priority</option>
-                <option value="medium">Medium Priority</option>
-                <option value="high">High Priority</option>
-                <option value="critical">Critical</option>
-              </select>
-              <button onClick={handleCreateTask} className="w-full bg-blue-600 hover:bg-blue-500 py-2 rounded font-semibold">Create Task</button>
-            </div>
-          </div>
+        {/* Dashboard Tab */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* Stats */}
+            {stats && (
+              <div className="grid grid-cols-5 gap-4">
+                <StatCard label="Total Tasks" value={stats.stats.totalTasks} color="text-white" />
+                <StatCard label="Pending" value={stats.stats.pending} color="text-yellow-400" />
+                <StatCard label="Running" value={stats.stats.running} color="text-blue-400" />
+                <StatCard label="Completed" value={stats.stats.completed} color="text-emerald-400" />
+                <StatCard label="Failed" value={stats.stats.failed} color="text-red-400" />
+              </div>
+            )}
 
-          <div className="bg-slate-800 rounded p-4">
-            <h2 className="text-lg font-semibold mb-4">Tasks ({tasks.length})</h2>
-            <div className="space-y-2 max-h-[500px] overflow-y-auto">
-              {tasks.length === 0 && <p className="text-slate-400 text-sm">No tasks yet</p>}
-              {tasks.map(t => (
-                <div key={t.id} className="bg-slate-700 rounded p-3">
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <p className="font-medium">{t.title}</p>
-                      {t.description && <p className="text-slate-400 text-sm mt-1">{t.description}</p>}
-                      <p className="text-slate-500 text-xs mt-2">
-                        {t.assigneeName || 'Unassigned'} · {new Date(t.createdAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-end gap-1 ml-3">
-                      <span className={`px-2 py-0.5 rounded text-xs ${statusColor(t.status)}`}>{t.status}</span>
-                      <span className={`text-xs ${priorityColor(t.priority)}`}>{t.priority}</span>
-                    </div>
-                  </div>
-                  {t.status !== 'done' && (
-                    <div className="flex gap-2 mt-2">
-                      {t.status === 'todo' && (
-                        <button onClick={() => handleUpdateTask(t.id, 'in_progress')} className="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded">Start</button>
-                      )}
-                      {t.status === 'in_progress' && (
-                        <button onClick={() => handleUpdateTask(t.id, 'done')} className="text-xs bg-green-600 hover:bg-green-500 px-2 py-1 rounded">Done</button>
-                      )}
-                      <button onClick={() => handleUpdateTask(t.id, 'blocked')} className="text-xs bg-red-600 hover:bg-red-500 px-2 py-1 rounded">Block</button>
-                    </div>
-                  )}
-                  {t.status === 'done' && (
-                    <button onClick={() => handleUpdateTask(t.id, 'todo')} className="text-xs bg-slate-600 hover:bg-slate-500 px-2 py-1 rounded mt-2">Reopen</button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'chat' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="bg-slate-800 rounded p-4">
-            <h2 className="text-lg font-semibold mb-4">Agents</h2>
-            <div className="space-y-2">
-              {(paperclipAgents || []).map((a: Agent) => (
-                <button key={a.id} onClick={() => { setSelectedAgent(a.id); loadMessages(a.id) }}
-                  className={`w-full text-left p-3 rounded ${selectedAgent === a.id ? 'bg-blue-600' : 'bg-slate-700 hover:bg-slate-600'}`}>
-                  <p className="font-medium">{a.name}</p>
-                  <p className="text-xs text-slate-400">{a.connected ? '🟢' : '⚪'} {a.status}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="col-span-2 bg-slate-800 rounded p-4 flex flex-col" style={{ minHeight: '400px' }}>
-            <h2 className="text-lg font-semibold mb-4">
-              Chat with {selectedAgent ? paperclipAgents?.find((a: Agent) => a.id === selectedAgent)?.name : 'Select an agent'}
-            </h2>
-            {!selectedAgent ? (
-              <p className="text-slate-400">Select an agent from the left to start chatting</p>
-            ) : (
-              <>
-                <div className="flex-1 overflow-y-auto space-y-2 mb-4 min-h-[200px]">
-                  {(messages[selectedAgent] || []).map((m: ChatMessage) => (
-                    <div key={m.id} className={`p-3 rounded ${m.from === 'user' ? 'bg-blue-600 ml-8' : 'bg-slate-700 mr-8'}`}>
-                      <p className="text-sm font-medium text-slate-300">{m.fromName} · {new Date(m.timestamp).toLocaleTimeString()}</p>
-                      <p className="mt-1">{m.content}</p>
-                    </div>
+            {/* Agent Overview */}
+            <div>
+              <h2 className="text-lg font-semibold mb-3">Active Agents</h2>
+              {loading ? (
+                <p className="text-slate-500">Loading...</p>
+              ) : agents.length > 0 ? (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {agents.map(agent => (
+                    <AgentCard key={agent.id} agent={agent} />
                   ))}
-                  {(!messages[selectedAgent] || messages[selectedAgent].length === 0) && (
-                    <p className="text-slate-500 text-sm">No messages yet</p>
-                  )}
-                  <div ref={chatEndRef} />
                 </div>
-                <div className="flex gap-2">
-                  <input value={chatMessage} onChange={e => setChatMessage(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSendChat()} placeholder="Type a message..."
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
-                  <button onClick={handleSendChat} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded font-semibold">Send</button>
+              ) : (
+                <p className="text-slate-500">No agents connected</p>
+              )}
+            </div>
+
+            {/* Recent Tasks */}
+            <div>
+              <h2 className="text-lg font-semibold mb-3">Recent Tasks</h2>
+              {tasks.length > 0 ? (
+                <div className="space-y-2">
+                  {tasks.slice(0, 5).map(task => (
+                    <TaskCard key={task.id} task={task} />
+                  ))}
                 </div>
-              </>
+              ) : (
+                <p className="text-slate-500">No tasks yet</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Agents Tab */}
+        {activeTab === 'agents' && (
+          <div className="space-y-6">
+            <h2 className="text-lg font-semibold">Agent Registry</h2>
+            {loading ? (
+              <p className="text-slate-500">Loading...</p>
+            ) : agents.length > 0 ? (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {agents.map(agent => (
+                  <AgentCard key={agent.id} agent={agent} />
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-500">
+                <p className="text-lg mb-2">No agents connected</p>
+                <p className="text-sm">Start the Prospyr platform to see agents here</p>
+              </div>
             )}
           </div>
-        </div>
-      )}
+        )}
 
-      <div className="mt-8 p-4 bg-slate-800 rounded">
-        <p className="text-slate-400 text-sm">Connected to: {API}</p>
-        <p className="text-slate-500 text-xs mt-1">Company: {COMPANY}</p>
-      </div>
+        {/* Tasks Tab */}
+        {activeTab === 'tasks' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-lg font-semibold">Task Queue</h2>
+              <div className="flex gap-2">
+                {['pending', 'running', 'completed', 'failed'].map(status => (
+                  <span key={status} className="px-2 py-1 bg-slate-800 rounded text-xs text-slate-400 capitalize">
+                    {status}: {tasks.filter(t => t.status === status).length}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {tasks.length > 0 ? (
+              <div className="space-y-2">
+                {tasks.map(task => (
+                  <TaskCard key={task.id} task={task} />
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-500">
+                <p className="text-lg mb-2">No tasks in queue</p>
+                <p className="text-sm">Submit a task to get started</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Submit Tab */}
+        {activeTab === 'submit' && (
+          <div className="max-w-2xl">
+            <SubmitTask onSubmit={handleSubmitTask} />
+          </div>
+        )}
+      </main>
     </div>
   )
 }

@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { addMessage, getMessages } from '@/lib/store'
-import { ChatMessage } from '../../lib/types'
+import { ChatMessage } from '@/lib/types'
 import { randomUUID } from 'crypto'
 
 export const dynamic = 'force-dynamic'
