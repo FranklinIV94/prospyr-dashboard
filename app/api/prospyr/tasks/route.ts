@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // API route: /api/prospyr/tasks
 // Create tasks and assign to agents (real-time via SSE)
 // Enhanced with full lifecycle, capabilities, priorities, and DB persistence
@@ -264,10 +265,54 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ task }, { status: 201 })
   } catch (error) {
+=======
+// GET /api/prospyr/tasks — list all tasks
+// POST /api/prospyr/tasks — create a new task
+
+import { NextRequest, NextResponse } from 'next/server'
+import { getAllTasks, addTask, updateTask } from '@/lib/store'
+import { Task } from '../../lib/types'
+import { randomUUID } from 'crypto'
+
+export const dynamic = 'force-dynamic'
+
+export async function GET() {
+  const tasks = getAllTasks()
+  return NextResponse.json({ tasks })
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { title, description, assigneeId, assigneeName, priority, createdBy } = body
+
+    if (!title) {
+      return NextResponse.json({ error: 'title is required' }, { status: 400 })
+    }
+
+    const task: Task = {
+      id: randomUUID(),
+      title,
+      description: description || '',
+      assigneeId: assigneeId || null,
+      assigneeName: assigneeName || null,
+      status: 'todo',
+      priority: priority || 'medium',
+      createdBy: createdBy || 'system',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+
+    addTask(task)
+
+    return NextResponse.json({ success: true, task }, { status: 201 })
+  } catch (e) {
+>>>>>>> b3ad74b (feat(prospyr): build command center API and dashboard UI)
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 }
 
+<<<<<<< HEAD
 // PATCH - Update task status
 export async function PATCH(request: NextRequest) {
   try {
@@ -388,3 +433,36 @@ export async function DELETE(request: NextRequest) {
 
   return NextResponse.json({ success: true })
 }
+=======
+// PATCH /api/prospyr/tasks — update a task (status, assignee, etc.)
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { taskId, status, assigneeId, assigneeName, priority } = body
+
+    if (!taskId) {
+      return NextResponse.json({ error: 'taskId is required' }, { status: 400 })
+    }
+
+    const updates: Partial<Task> = {}
+    if (status) updates.status = status
+    if (assigneeId !== undefined) updates.assigneeId = assigneeId
+    if (assigneeName !== undefined) updates.assigneeName = assigneeName
+    if (priority) updates.priority = priority
+
+    if (status === 'done') {
+      updates.completedAt = new Date().toISOString()
+    }
+
+    const updated = updateTask(taskId, updates)
+
+    if (!updated) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 })
+    }
+
+    return NextResponse.json({ success: true, task: updated })
+  } catch (e) {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+  }
+}
+>>>>>>> b3ad74b (feat(prospyr): build command center API and dashboard UI)

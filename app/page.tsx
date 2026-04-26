@@ -1,678 +1,299 @@
 'use client'
+import useSWR from 'swr'
+import { useState, useEffect, useRef } from 'react'
 
-import { useState, useEffect, useCallback } from 'react'
-import { useSession, signOut } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
+const API = process.env.NEXT_PUBLIC_PAPERCLIP_API || 'http://localhost:3100'
+const K = process.env.NEXT_PUBLIC_PAPERCLIP_KEY || ''
+const COMPANY = process.env.NEXT_PUBLIC_PAPERCLIP_COMPANY || 'b18b9b76-bb39-42b8-8349-c323bffd5e3b'
 
-// Company definitions
-const COMPANIES = [
-  { id: 'all', name: 'All Companies', icon: '🏢' },
-  { id: 'auto', name: 'All Lines Auto', icon: '🚗' },
-  { id: 'albs', name: 'All Lines Business Solutions', icon: '💼' },
-  { id: 'claims', name: 'All Lines Claims Consultants', icon: '📋' },
-]
+const fetcher = (url: string) => fetch(url, { headers: { Authorization: `Bearer ${K}` } }).then(r => r.json())
 
-// Mock agents for demo
-const MOCK_AGENTS = [
-  { id: 'ceo-001', name: 'CEO Agent', role: 'ceo', company: 'all', status: 'idle', icon: '👔', description: 'Strategic decisions & delegation' },
-  { id: 'southstar-001', name: 'Southstar', role: 'coo', company: 'auto', status: 'idle', icon: '⚡', description: 'COO — Operations & Technical' },
-  { id: 'northstar-001', name: 'Northstar', role: 'coo', company: 'albs', status: 'idle', icon: '⭐', description: 'COO — Business Solutions' },
-  { id: 'sales-001', name: 'Sales Agent', role: 'sales', company: 'auto', status: 'offline', icon: '📈', description: 'Lead generation & follow-up' },
-  { id: 'support-001', name: 'Support Agent', role: 'support', company: 'auto', status: 'offline', icon: '🎧', description: 'Customer service & issues' },
-  { id: 'admin-001', name: 'Admin Agent', role: 'admin', company: 'albs', status: 'offline', icon: '📝', description: 'Scheduling & data entry' },
-  { id: 'claims-001', name: 'Claims Agent', role: 'claims', company: 'claims', status: 'offline', icon: '🏥', description: 'Insurance claims processing' },
-]
-
-// Mock tasks
-const MOCK_TASKS = [
-  { id: 't1', description: 'Review Q1 operational costs for All Lines Auto', company: 'auto', priority: 'high', assignedTo: 'southstar-001', status: 'in_progress' },
-  { id: 't2', description: 'Follow up with potential ALBS clients', company: 'albs', priority: 'medium', assignedTo: 'northstar-001', status: 'pending' },
-  { id: 't3', description: 'Process insurance claim for Johnson auto', company: 'claims', priority: 'critical', assignedTo: 'claims-001', status: 'pending' },
-]
-
-// Mock usage stats
-const MOCK_USAGE = {
-  todayTokens: 128450,
-  todayCost: 0.64,
-  weekTokens: 892300,
-  weekCost: 4.46,
-  activeAgents: 3,
-  totalAgents: 7,
+interface Agent {
+  id: string; name: string; role: string; status: string
+  capabilities: string[]; lastHeartbeat: string; currentTaskId: string | null; connected: boolean
 }
-
-function CompanySelector({ selected, onChange }: { selected: string; onChange: (id: string) => void }) {
-  return (
-    <div className="flex gap-2 flex-wrap">
-      {COMPANIES.map((company) => (
-        <button
-          key={company.id}
-          onClick={() => onChange(company.id)}
-          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-            selected === company.id
-              ? 'bg-blue-600 text-white'
-              : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-          }`}
-        >
-          <span className="mr-1.5">{company.icon}</span>
-          {company.name}
-        </button>
-      ))}
-    </div>
-  )
+interface Task {
+  id: string; title: string; description: string; assigneeId: string | null
+  assigneeName: string | null; status: string; priority: string
+  createdBy: string; createdAt: string; updatedAt: string
 }
-
-function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color: string }) {
-  return (
-    <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4">
-      <div className={`text-2xl font-bold ${color}`}>{value}</div>
-      <div className="text-xs text-slate-400 mt-1">{label}</div>
-      {sub && <div className="text-xs text-slate-600">{sub}</div>}
-    </div>
-  )
-}
-
-function AgentCard({ agent, onChat }: { agent: typeof MOCK_AGENTS[0]; onChat: () => void }) {
-  const statusColors: Record<string, string> = {
-    idle: 'bg-emerald-500',
-    running: 'bg-blue-500',
-    busy: 'bg-yellow-500',
-    offline: 'bg-slate-600',
-  }
-
-  const roleLabels: Record<string, string> = {
-    ceo: 'Chief Executive Officer',
-    coo: 'Chief Operations Officer',
-    sales: 'Sales Agent',
-    support: 'Support Agent',
-    admin: 'Admin Agent',
-    claims: 'Claims Agent',
-  }
-
-  return (
-    <div className="bg-slate-800/70 border border-slate-700 rounded-xl p-5 hover:border-slate-600 transition-all">
-      <div className="flex justify-between items-start mb-3">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-xl">
-            {agent.icon}
-          </div>
-          <div>
-            <h3 className="font-semibold text-white">{agent.name}</h3>
-            <p className="text-slate-400 text-xs">{roleLabels[agent.role] || agent.role}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className={`w-2 h-2 rounded-full ${statusColors[agent.status]}`} />
-          <span className="text-xs text-slate-400 capitalize">{agent.status}</span>
-        </div>
-      </div>
-      <p className="text-slate-400 text-sm mb-3">{agent.description}</p>
-      <div className="flex gap-2">
-        <button
-          onClick={onChat}
-          disabled={agent.status === 'offline'}
-          className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          💬 Chat
-        </button>
-        <button className="py-2 px-3 bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm rounded-lg transition-colors">
-          📋 Tasks
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function TaskRow({ task }: { task: any }) {
-  const priorityColors: Record<string, string> = {
-    critical: 'bg-red-600',
-    high: 'bg-orange-600',
-    medium: 'bg-yellow-600',
-    low: 'bg-slate-600',
-  }
-  const statusColors: Record<string, string> = {
-    pending: 'bg-slate-600',
-    claimed: 'bg-purple-600',
-    in_progress: 'bg-blue-600',
-    completed: 'bg-emerald-600',
-    failed: 'bg-red-600',
-    blocked: 'bg-red-900',
-  }
-
-  return (
-    <div className="flex items-center gap-4 p-4 bg-slate-800/40 border border-slate-700/50 rounded-lg">
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-white truncate">{task.title || task.description}</p>
-        <p className="text-xs text-slate-500 mt-0.5">
-          {task.type || 'general'} {task.workspaceId ? `• ${task.workspaceId}` : ''}
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${priorityColors[task.priority] || 'bg-slate-600'}`}>
-          {task.priority || 'medium'}
-        </span>
-        <span className={`px-2 py-0.5 rounded text-xs text-white ${statusColors[task.status] || 'bg-slate-600'}`}>
-          {(task.status || 'pending').replace('_', ' ')}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function ChatPanel({ agent, onClose }: { agent: typeof MOCK_AGENTS[0]; onClose: () => void }) {
-  const [message, setMessage] = useState('')
-  const [history, setHistory] = useState<Array<{ role: string; content: string }>>([
-    { role: 'agent', content: `Hello, I'm ${agent.name}. How can I assist you today?` }
-  ])
-  const [loading, setLoading] = useState(false)
-  const [lastMessageId, setLastMessageId] = useState<string | null>(null)
-
-  // Poll for agent responses
-  useEffect(() => {
-    if (!lastMessageId) return
-    
-    const pollResponse = async () => {
-      try {
-        const res = await fetch(`/api/chat?responseId=${encodeURIComponent(lastMessageId)}`)
-        if (res.ok) {
-          const data = await res.json()
-          if (data.response) {
-            setHistory(prev => [...prev, { role: 'assistant', content: data.response.content }])
-            setLastMessageId(null) // Response received, stop polling
-          }
-        }
-      } catch (e) { console.error('Poll error:', e) }
-    }
-    
-    // Poll every 2 seconds until response received
-    const interval = setInterval(pollResponse, 2000)
-    return () => clearInterval(interval)
-  }, [lastMessageId])
-
-  const handleSend = async () => {
-    if (!message.trim() || loading) return
-
-    const userMsg = message
-    setMessage('')
-    setLoading(true)
-
-    // Add user message immediately
-    setHistory(prev => [...prev, { role: 'user', content: userMsg }])
-
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: agent.id, content: userMsg }),
-      })
-
-      if (!res.ok) throw new Error(`Error: ${res.status}`)
-
-      const data = await res.json()
-      setLastMessageId(data.messageId) // Start polling for response
-
-    } catch (error) {
-      setHistory(prev => [...prev, { role: 'agent', content: `Error: ${String(error)}` }])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-slate-950/90 z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl h-full max-h-[32rem] bg-slate-900 border border-slate-700 rounded-2xl flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-lg">
-              {agent.icon}
-            </div>
-            <div>
-              <h3 className="font-semibold text-white">{agent.name}</h3>
-              <p className="text-xs text-slate-400">{agent.description}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400">
-            ✕
-          </button>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {history.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-800 text-slate-200'
-              }`}>
-                {msg.content}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Input */}
-        <div className="p-4 border-t border-slate-700">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={`Message ${agent.name}...`}
-              className="flex-1 px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            />
-            <button
-              onClick={handleSend}
-              disabled={loading}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-xl transition-colors"
-            >
-              {loading ? '...' : 'Send'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+interface ChatMessage {
+  id: string; from: string; fromId: string; fromName: string
+  toAgentId: string; content: string; timestamp: string
 }
 
 export default function Dashboard() {
-  const { data: session, status } = useSession()
-  const router = useRouter()
-  const [selectedCompany, setSelectedCompany] = useState('all')
-  const [activeTab, setActiveTab] = useState<'agents' | 'tasks' | 'analytics'>('agents')
-  const [chatAgent, setChatAgent] = useState<typeof MOCK_AGENTS[0] | null>(null)
-  const [showNewTaskModal, setShowNewTaskModal] = useState(false)
-  const [tasks, setTasks] = useState<any[]>([])
-  const [tasksLoading, setTasksLoading] = useState(false)
-  const [mounted, setMounted] = useState(false)
+  const { data: paperclipAgents } = useSWR(`${API}/api/companies/${COMPANY}/agents`, fetcher)
+  const [activeTab, setActiveTab] = useState<'agents' | 'tasks' | 'chat'>('agents')
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({})
+  const [selectedAgent, setSelectedAgent] = useState<string>('')
+  const [eventSource, setEventSource] = useState<EventSource | null>(null)
 
-  useEffect(() => { setMounted(true) }, [])
+  const [taskTitle, setTaskTitle] = useState('')
+  const [taskDesc, setTaskDesc] = useState('')
+  const [taskAssignee, setTaskAssignee] = useState('')
+  const [taskPriority, setTaskPriority] = useState('medium')
 
-  // Fetch tasks from API
-  const fetchTasks = useCallback(async () => {
-    setTasksLoading(true)
+  const [chatMessage, setChatMessage] = useState('')
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
+  const chatEndRef = useRef<HTMLDivElement>(null)
+
+  const loadTasks = async () => {
     try {
       const res = await fetch('/api/prospyr/tasks')
-      if (res.ok) {
-        const data = await res.json()
-        setTasks(data.tasks || [])
-      }
-    } catch (e) {
-      console.error('Failed to fetch tasks:', e)
-    } finally {
-      setTasksLoading(false)
+      const data = await res.json()
+      setTasks(data.tasks || [])
+    } catch {}
+  }
+
+  const loadMessages = async (agentId: string) => {
+    try {
+      const res = await fetch(`/api/prospyr/chat?agentId=${agentId}`)
+      const data = await res.json()
+      setMessages(prev => ({ ...prev, [agentId]: data.messages || [] }))
+    } catch {}
+  }
+
+  useEffect(() => {
+    const es = new EventSource('/api/prospyr/events?agentId=dashboard')
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data)
+        if (event.type === 'task' || event.type === 'message') loadTasks()
+      } catch {}
     }
+    setEventSource(es)
+    loadTasks()
+    return () => es.close()
   }, [])
 
   useEffect(() => {
-    if (mounted && activeTab === 'tasks') {
-      fetchTasks()
-    }
-  }, [mounted, activeTab, fetchTasks])
+    if (selectedAgent) loadMessages(selectedAgent)
+  }, [selectedAgent])
 
-  // Redirect if not authenticated
   useEffect(() => {
-    if (mounted && status === 'unauthenticated') {
-      router.push('/login')
-    }
-  }, [mounted, status, router])
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatHistory])
 
-  if (!mounted || status === 'loading') {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-white">Loading...</div>
-      </div>
-    )
+  const handleCreateTask = async () => {
+    if (!taskTitle.trim()) return
+    const agentName = paperclipAgents?.find((a: Agent) => a.id === taskAssignee)?.name || null
+    await fetch('/api/prospyr/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: taskTitle, description: taskDesc, assigneeId: taskAssignee || null, assigneeName: agentName, priority: taskPriority, createdBy: 'Franklin' })
+    })
+    setTaskTitle(''); setTaskDesc(''); setTaskAssignee(''); setTaskPriority('medium')
+    loadTasks()
   }
 
-  if (!session) return null
+  const handleSendChat = async () => {
+    if (!chatMessage.trim() || !selectedAgent) return
+    await fetch('/api/prospyr/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toAgentId: selectedAgent, content: chatMessage, from: 'user', fromId: 'franklin', fromName: 'Franklin' })
+    })
+    setChatMessage('')
+    loadMessages(selectedAgent)
+  }
 
-  const filteredAgents = selectedCompany === 'all'
-    ? MOCK_AGENTS
-    : MOCK_AGENTS.filter(a => a.company === selectedCompany || a.company === 'all')
+  const handleUpdateTask = async (taskId: string, status: string) => {
+    await fetch('/api/prospyr/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, status })
+    })
+    loadTasks()
+  }
+
+  const handleSelectAgent = (agentId: string) => {
+    setSelectedAgent(agentId)
+    setActiveTab('chat')
+    loadMessages(agentId)
+    setChatHistory(messages[agentId] || [])
+  }
+
+  useEffect(() => {
+    if (selectedAgent && messages[selectedAgent]) setChatHistory(messages[selectedAgent])
+  }, [messages, selectedAgent])
+
+  const statusColor = (s: string) => {
+    if (s === 'done') return 'bg-green-600'
+    if (s === 'in_progress') return 'bg-blue-600'
+    if (s === 'blocked') return 'bg-red-600'
+    return 'bg-slate-600'
+  }
+  const priorityColor = (p: string) => {
+    if (p === 'critical') return 'text-red-400'
+    if (p === 'high') return 'text-orange-400'
+    if (p === 'low') return 'text-slate-400'
+    return 'text-slate-300'
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center font-bold text-lg">
-                P
-              </div>
+    <div className="p-6 max-w-7xl mx-auto">
+      <h1 className="text-3xl font-bold mb-2">Prospyr Control</h1>
+      <p className="text-slate-400 mb-8">All Lines Operations Hub</p>
+
+      <div className="flex gap-4 mb-6 border-b border-slate-700 pb-4">
+        {['agents', 'tasks', 'chat'].map(tab => (
+          <button key={tab} onClick={() => setActiveTab(tab as typeof activeTab)}
+            className={`px-4 py-2 rounded capitalize ${activeTab === tab ? 'bg-blue-600' : 'bg-slate-800'}`}>{tab}</button>
+        ))}
+        <span className="ml-auto text-slate-400 text-sm pt-2">
+          {paperclipAgents?.length || 0} agents · {tasks.length} tasks
+        </span>
+      </div>
+
+      {activeTab === 'agents' && (
+        <div className="space-y-4">
+          {(paperclipAgents || []).map((a: Agent) => (
+            <div key={a.id} className="bg-slate-800 rounded p-4 flex justify-between items-center">
               <div>
-                <h1 className="text-xl font-bold">Prospyr Control</h1>
-                <p className="text-xs text-slate-500">Prospyr Inc. Operations Hub</p>
+                <h3 className="font-semibold text-lg">{a.name}</h3>
+                <p className="text-slate-400 text-sm">{a.role || 'agent'} · {a.adapterType || 'unknown'}</p>
+                <p className="text-slate-500 text-xs mt-1">
+                  {a.lastHeartbeat ? `Last heartbeat: ${new Date(a.lastHeartbeat).toLocaleTimeString()}` : 'Never'}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`px-3 py-1 rounded text-sm ${a.status === 'idle' || a.status === 'running' ? 'bg-green-600' : 'bg-slate-600'}`}>
+                  {a.connected ? '🟢 connected' : '⚪ disconnected'}
+                </span>
+                {a.capabilities?.length > 0 && (
+                  <div className="flex gap-1 flex-wrap max-w-[200px]">
+                    {a.capabilities.slice(0, 4).map(c => (
+                      <span key={c} className="text-xs bg-slate-700 px-2 py-0.5 rounded">{c}</span>
+                    ))}
+                  </div>
+                )}
+                <button onClick={() => handleSelectAgent(a.id)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded text-sm">Message</button>
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              <div className="text-right">
-                <p className="text-sm font-medium">{session.user?.name}</p>
-                <p className="text-xs text-slate-500">CEO</p>
-              </div>
-              <button
-                onClick={() => signOut({ callbackUrl: '/login' })}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm rounded-lg transition-colors"
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        {/* Company Selector */}
-        <div className="mb-8">
-          <CompanySelector selected={selectedCompany} onChange={setSelectedCompany} />
-        </div>
-
-        {/* Quick Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <StatCard label="Today's Cost" value={`$${MOCK_USAGE.todayCost.toFixed(2)}`} sub={`${MOCK_USAGE.todayTokens.toLocaleString()} tokens`} color="text-emerald-400" />
-          <StatCard label="Week Cost" value={`$${MOCK_USAGE.weekCost.toFixed(2)}`} sub={`${MOCK_USAGE.weekTokens.toLocaleString()} tokens`} color="text-blue-400" />
-          <StatCard label="Active Agents" value={`${MOCK_USAGE.activeAgents}/${MOCK_USAGE.totalAgents}`} sub="online now" color="text-purple-400" />
-          <StatCard label="Pending Tasks" value={MOCK_TASKS.length} sub="require attention" color="text-orange-400" />
-        </div>
-
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6 border-b border-slate-800 pb-4">
-          {[
-            { id: 'agents', label: 'Agents', icon: '🤖' },
-            { id: 'tasks', label: 'Tasks', icon: '📋' },
-            { id: 'analytics', label: 'Analytics', icon: '📊' },
-          ].map(({ id, label, icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id as any)}
-              className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === id
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              <span className="mr-1.5">{icon}</span>
-              {label}
-            </button>
           ))}
+          {(!paperclipAgents || paperclipAgents.length === 0) && <p className="text-slate-400">Loading agents from Paperclip...</p>}
         </div>
+      )}
 
-        {/* Agents Tab */}
-        {activeTab === 'agents' && (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {filteredAgents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                onChat={() => setChatAgent(agent)}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Tasks Tab */}
-        {activeTab === 'tasks' && (
-          <div className="space-y-3">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-semibold">Active Tasks</h2>
-              <button 
-                onClick={() => setShowNewTaskModal(true)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-              >
-                + New Task
-              </button>
+      {activeTab === 'tasks' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-slate-800 rounded p-4">
+            <h2 className="text-lg font-semibold mb-4">Create Task</h2>
+            <div className="space-y-3">
+              <input value={taskTitle} onChange={e => setTaskTitle(e.target.value)} placeholder="Task title"
+                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+              <textarea value={taskDesc} onChange={e => setTaskDesc(e.target.value)} placeholder="Description (optional)" rows={3}
+                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+              <select value={taskAssignee} onChange={e => setTaskAssignee(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white">
+                <option value="">Unassigned</option>
+                {(paperclipAgents || []).map((a: Agent) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+              <select value={taskPriority} onChange={e => setTaskPriority(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white">
+                <option value="low">Low Priority</option>
+                <option value="medium">Medium Priority</option>
+                <option value="high">High Priority</option>
+                <option value="critical">Critical</option>
+              </select>
+              <button onClick={handleCreateTask} className="w-full bg-blue-600 hover:bg-blue-500 py-2 rounded font-semibold">Create Task</button>
             </div>
-            {tasksLoading ? (
-              <div className="text-slate-400 text-center py-8">Loading tasks...</div>
-            ) : tasks.length === 0 ? (
-              <div className="text-slate-400 text-center py-8">No tasks yet. Create one to get started!</div>
+          </div>
+
+          <div className="bg-slate-800 rounded p-4">
+            <h2 className="text-lg font-semibold mb-4">Tasks ({tasks.length})</h2>
+            <div className="space-y-2 max-h-[500px] overflow-y-auto">
+              {tasks.length === 0 && <p className="text-slate-400 text-sm">No tasks yet</p>}
+              {tasks.map(t => (
+                <div key={t.id} className="bg-slate-700 rounded p-3">
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <p className="font-medium">{t.title}</p>
+                      {t.description && <p className="text-slate-400 text-sm mt-1">{t.description}</p>}
+                      <p className="text-slate-500 text-xs mt-2">
+                        {t.assigneeName || 'Unassigned'} · {new Date(t.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 ml-3">
+                      <span className={`px-2 py-0.5 rounded text-xs ${statusColor(t.status)}`}>{t.status}</span>
+                      <span className={`text-xs ${priorityColor(t.priority)}`}>{t.priority}</span>
+                    </div>
+                  </div>
+                  {t.status !== 'done' && (
+                    <div className="flex gap-2 mt-2">
+                      {t.status === 'todo' && (
+                        <button onClick={() => handleUpdateTask(t.id, 'in_progress')} className="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded">Start</button>
+                      )}
+                      {t.status === 'in_progress' && (
+                        <button onClick={() => handleUpdateTask(t.id, 'done')} className="text-xs bg-green-600 hover:bg-green-500 px-2 py-1 rounded">Done</button>
+                      )}
+                      <button onClick={() => handleUpdateTask(t.id, 'blocked')} className="text-xs bg-red-600 hover:bg-red-500 px-2 py-1 rounded">Block</button>
+                    </div>
+                  )}
+                  {t.status === 'done' && (
+                    <button onClick={() => handleUpdateTask(t.id, 'todo')} className="text-xs bg-slate-600 hover:bg-slate-500 px-2 py-1 rounded mt-2">Reopen</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'chat' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="bg-slate-800 rounded p-4">
+            <h2 className="text-lg font-semibold mb-4">Agents</h2>
+            <div className="space-y-2">
+              {(paperclipAgents || []).map((a: Agent) => (
+                <button key={a.id} onClick={() => { setSelectedAgent(a.id); loadMessages(a.id) }}
+                  className={`w-full text-left p-3 rounded ${selectedAgent === a.id ? 'bg-blue-600' : 'bg-slate-700 hover:bg-slate-600'}`}>
+                  <p className="font-medium">{a.name}</p>
+                  <p className="text-xs text-slate-400">{a.connected ? '🟢' : '⚪'} {a.status}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="col-span-2 bg-slate-800 rounded p-4 flex flex-col" style={{ minHeight: '400px' }}>
+            <h2 className="text-lg font-semibold mb-4">
+              Chat with {selectedAgent ? paperclipAgents?.find((a: Agent) => a.id === selectedAgent)?.name : 'Select an agent'}
+            </h2>
+            {!selectedAgent ? (
+              <p className="text-slate-400">Select an agent from the left to start chatting</p>
             ) : (
-              tasks.map((task) => (
-                <TaskRow key={task.id} task={task} />
-              ))
+              <>
+                <div className="flex-1 overflow-y-auto space-y-2 mb-4 min-h-[200px]">
+                  {(messages[selectedAgent] || []).map((m: ChatMessage) => (
+                    <div key={m.id} className={`p-3 rounded ${m.from === 'user' ? 'bg-blue-600 ml-8' : 'bg-slate-700 mr-8'}`}>
+                      <p className="text-sm font-medium text-slate-300">{m.fromName} · {new Date(m.timestamp).toLocaleTimeString()}</p>
+                      <p className="mt-1">{m.content}</p>
+                    </div>
+                  ))}
+                  {(!messages[selectedAgent] || messages[selectedAgent].length === 0) && (
+                    <p className="text-slate-500 text-sm">No messages yet</p>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+                <div className="flex gap-2">
+                  <input value={chatMessage} onChange={e => setChatMessage(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSendChat()} placeholder="Type a message..."
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+                  <button onClick={handleSendChat} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded font-semibold">Send</button>
+                </div>
+              </>
             )}
           </div>
-        )}
-
-        {/* Analytics Tab */}
-        {activeTab === 'analytics' && (
-          <div className="grid gap-6 md:grid-cols-2">
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6">
-              <h3 className="text-lg font-semibold mb-4">Token Usage (7 Days)</h3>
-              <div className="h-48 flex items-end gap-2">
-                {[65, 45, 80, 55, 90, 70, 85].map((h, i) => (
-                  <div key={i} className="flex-1 bg-blue-600/30 rounded-t" style={{ height: `${h}%` }}>
-                    <div className="w-full bg-blue-600 rounded-t" style={{ height: `${h}%` }} />
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-between mt-2 text-xs text-slate-500">
-                <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
-              </div>
-            </div>
-            <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6">
-              <h3 className="text-lg font-semibold mb-4">Cost by Company</h3>
-              <div className="space-y-4">
-                {[
-                  { name: 'All Lines Auto', cost: 2.34, pct: 52 },
-                  { name: 'ALBS', cost: 1.45, pct: 33 },
-                  { name: 'ALBS Claims', cost: 0.67, pct: 15 },
-                ].map(({ name, cost, pct }) => (
-                  <div key={name}>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-slate-300">{name}</span>
-                      <span className="text-slate-400">${cost.toFixed(2)} ({pct}%)</span>
-                    </div>
-                    <div className="h-2 bg-slate-700 rounded-full">
-                      <div className="h-full bg-blue-600 rounded-full" style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Chat Panel */}
-      {chatAgent && (
-        <ChatPanel agent={chatAgent} onClose={() => setChatAgent(null)} />
-      )}
-
-      {/* New Task Modal */}
-      {showNewTaskModal && (
-        <NewTaskModal 
-          onClose={() => setShowNewTaskModal(false)} 
-          onTaskCreated={(task) => {
-            console.log('Task created:', task)
-            setShowNewTaskModal(false)
-            fetchTasks()
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-function NewTaskModal({ onClose, onTaskCreated }: { onClose: () => void; onTaskCreated: (task: any) => void }) {
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [type, setType] = useState('general')
-  const [priority, setPriority] = useState('medium')
-  const [assignTo, setAssignTo] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  const taskTypes = [
-    { value: 'security-audit', label: '🔒 Security Audit' },
-    { value: 'code-review', label: '📝 Code Review' },
-    { value: 'document-processing', label: '📄 Document Processing' },
-    { value: 'research', label: '🔍 Research' },
-    { value: 'client-communication', label: '💬 Client Communication' },
-    { value: 'general', label: '⚡ General' },
-  ]
-
-  const priorities = [
-    { value: 'critical', label: '🔴 Critical', color: 'bg-red-600' },
-    { value: 'high', label: '🟠 High', color: 'bg-orange-600' },
-    { value: 'medium', label: '🟡 Medium', color: 'bg-yellow-600' },
-    { value: 'low', label: '⚪ Low', color: 'bg-slate-600' },
-  ]
-
-  const agents = MOCK_AGENTS.filter(a => a.status !== 'offline')
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!title.trim() || !description.trim()) {
-      setError('Title and description are required')
-      return
-    }
-
-    setLoading(true)
-    setError('')
-
-    try {
-      const res = await fetch('/api/prospyr/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: title.trim(),
-          description: description.trim(),
-          type,
-          priority,
-          assignTo: assignTo || undefined,
-          requiredCapabilities: type !== 'general' ? [type] : [],
-        }),
-      })
-
-      if (!res.ok) {
-        throw new Error(`Error: ${res.status}`)
-      }
-
-      const data = await res.json()
-      onTaskCreated(data.task)
-    } catch (err) {
-      setError(String(err))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-slate-950/90 z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h3 className="text-lg font-semibold text-white">Create New Task</h3>
-          <button 
-            onClick={onClose}
-            className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"
-          >
-            ✕
-          </button>
         </div>
+      )}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-          {error && (
-            <div className="p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">
-              Title *
-            </label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Brief task title"
-              className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">
-              Description *
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Detailed task description"
-              rows={3}
-              className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                Type
-              </label>
-              <select
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-blue-500"
-              >
-                {taskTypes.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">
-                Priority
-              </label>
-              <select
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-                className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-blue-500"
-              >
-                {priorities.map((p) => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">
-              Assign To (optional)
-            </label>
-            <select
-              value={assignTo}
-              onChange={(e) => setAssignTo(e.target.value)}
-              className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-blue-500"
-            >
-              <option value="">Unassigned - Any available agent</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2 px-4 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 py-2 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded-xl transition-colors"
-            >
-              {loading ? 'Creating...' : 'Create Task'}
-            </button>
-          </div>
-        </form>
+      <div className="mt-8 p-4 bg-slate-800 rounded">
+        <p className="text-slate-400 text-sm">Connected to: {API}</p>
+        <p className="text-slate-500 text-xs mt-1">Company: {COMPANY}</p>
       </div>
     </div>
   )
